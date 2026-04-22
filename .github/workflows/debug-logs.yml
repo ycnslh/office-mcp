@@ -25,16 +25,17 @@ jobs:
       - name: office-mcp — last 100 log lines
         run: docker logs office-mcp --tail 100 2>&1 || true
 
-      - name: Probe MiniMax from inside the LibreChat container
+      - name: Probe MiniMax with a sidecar curl on the office-mcp network
         run: |
-          docker exec librechat sh -c '
-            apk add --no-cache curl >/dev/null 2>&1 || apt-get install -y curl >/dev/null 2>&1 || true
-            curl -sS -o /tmp/mm.json -w "HTTP %{http_code}\n" \
-              -H "Authorization: Bearer $MINIMAX_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{\"model\":\"$MINIMAX_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
-              "$MINIMAX_BASE_URL/chat/completions"
-            echo "── response body (first 500 chars) ───────────────"
-            head -c 500 /tmp/mm.json
-            echo
-          ' || true
+          KEY=$(docker exec librechat sh -c 'printf %s "$MINIMAX_API_KEY"')
+          MODEL=$(docker exec librechat sh -c 'printf %s "$MINIMAX_MODEL"')
+          BASE=$(docker exec librechat sh -c 'printf %s "$MINIMAX_BASE_URL"')
+          echo "Calling ${BASE}/chat/completions with model=${MODEL}"
+          docker run --rm --network office-mcp curlimages/curl:8.10.1 \
+            -sS -w "\nHTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${KEY}" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
+            "${BASE}/chat/completions" \
+            | head -c 1500
+          echo
