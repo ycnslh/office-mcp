@@ -42,7 +42,8 @@ jobs:
             -v ${{ github.workspace }}:/app \
             -w /app \
             python:3.12-slim \
-            sh -c "pip install -q poetry==1.8.4 \
+            sh -c "export PATH=/tmp/.local/bin:\$PATH \
+              && pip install --quiet --user poetry==1.8.4 \
               && poetry install --with dev --no-ansi \
               && poetry run ruff check . \
               && poetry run pytest -v --tb=short -p no:cacheprovider"
