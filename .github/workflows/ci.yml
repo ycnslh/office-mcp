@@ -48,6 +48,9 @@ jobs:
               && poetry run pytest -v --tb=short -p no:cacheprovider"
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
+  # PoC mode: everything is hardcoded except MINIMAX_API_KEY.
+  # Repo is private, so the bearer token / LibreChat secrets being in plain
+  # text is acceptable. Rotate before any non-PoC use.
   deploy:
     name: Deploy
     runs-on: self-hosted
@@ -59,50 +62,37 @@ jobs:
 
       - name: Generate .env
         run: |
-          {
-            # office-mcp core
-            echo "OFFICE_MCP_HOST=0.0.0.0"
-            echo "OFFICE_MCP_PORT=${{ vars.OFFICE_MCP_PORT }}"
-            echo "OFFICE_MCP_LOG_LEVEL=${{ vars.OFFICE_MCP_LOG_LEVEL }}"
-            echo "OFFICE_MCP_TOKEN=${{ secrets.OFFICE_MCP_TOKEN }}"
-            echo "OFFICE_MCP_LOCAL_ROOT=/data"
-            echo "OFFICE_MCP_MAX_FILE_SIZE_MB=${{ vars.OFFICE_MCP_MAX_FILE_SIZE_MB }}"
-            echo "OFFICE_MCP_RATE_LIMIT_PER_MIN=${{ vars.OFFICE_MCP_RATE_LIMIT_PER_MIN }}"
+          cat > .env <<EOF
+          # office-mcp core
+          OFFICE_MCP_HOST=0.0.0.0
+          OFFICE_MCP_PORT=8080
+          OFFICE_MCP_LOG_LEVEL=INFO
+          OFFICE_MCP_TOKEN=e885a1ec740aa3318faf6e0fea64481eb71717eb2c290938827f8ece570d056e
+          OFFICE_MCP_LOCAL_ROOT=/data
+          OFFICE_MCP_MAX_FILE_SIZE_MB=50
+          OFFICE_MCP_RATE_LIMIT_PER_MIN=60
 
-            # Storage backends — only injected if the secret/var is set
-            echo "GRAPH_TENANT_ID=${{ secrets.GRAPH_TENANT_ID }}"
-            echo "GRAPH_CLIENT_ID=${{ secrets.GRAPH_CLIENT_ID }}"
-            echo "GRAPH_CLIENT_SECRET=${{ secrets.GRAPH_CLIENT_SECRET }}"
-            echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"
-            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-            echo "AWS_REGION=${{ vars.AWS_REGION }}"
-            echo "AZURE_STORAGE_CONNECTION_STRING=${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}"
+          # LibreChat dev stack
+          LIBRECHAT_VERSION=v0.8.4
+          LIBRECHAT_PORT=3080
+          CREDS_KEY=c338d5f964ac62bd0cbc6348dc7c8774676b268f083ec020a1c0f6c263789d86
+          CREDS_IV=f4391d526676a5e11bca5fef26703a31
+          JWT_SECRET=52da6a0d900a72c69160eb5aea07ab281b8bafe1c70666df9d2ef98e47f2468a
+          JWT_REFRESH_SECRET=7f28eff69e733ba749187aae5be8cd579da45967dbb3ddd19d057eca36d66a6c
 
-            # LibreChat dev stack
-            echo "LIBRECHAT_VERSION=${{ vars.LIBRECHAT_VERSION }}"
-            echo "LIBRECHAT_PORT=${{ vars.LIBRECHAT_PORT }}"
-            echo "CREDS_KEY=${{ secrets.CREDS_KEY }}"
-            echo "CREDS_IV=${{ secrets.CREDS_IV }}"
-            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}"
-            echo "JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}"
+          # MiniMax LLM — only real secret, injected from GitHub
+          MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }}
+          MINIMAX_BASE_URL=https://api.minimax.io/v1
+          MINIMAX_MODEL=MiniMax-M2.7
+          EOF
 
-            # MiniMax LLM
-            echo "MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }}"
-            echo "MINIMAX_BASE_URL=${{ vars.MINIMAX_BASE_URL }}"
-            echo "MINIMAX_MODEL=${{ vars.MINIMAX_MODEL }}"
-          } > .env
-
-      - name: Validate required env vars
+      - name: Validate MiniMax API key is present
         run: |
-          for key in OFFICE_MCP_TOKEN OFFICE_MCP_PORT \
-                    CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET \
-                    MINIMAX_API_KEY MINIMAX_MODEL; do
-            val=$(grep "^${key}=" .env | cut -d= -f2-)
-            if [ -z "$val" ]; then
-              echo "Missing required env var: $key"
-              exit 1
-            fi
-          done
+          val=$(grep '^MINIMAX_API_KEY=' .env | cut -d= -f2-)
+          if [ -z "$val" ]; then
+            echo "Missing required GitHub secret: MINIMAX_API_KEY"
+            exit 1
+          fi
           echo ".env validated"
 
       - name: Stop existing containers
@@ -115,11 +105,9 @@ jobs:
 
       - name: Wait for office-mcp health
         run: |
-          PORT=$(grep '^OFFICE_MCP_PORT=' .env | cut -d= -f2 | tr -d '\r')
-          PORT="${PORT:-8080}"
-          echo "Waiting for office-mcp on port $PORT..."
+          echo "Waiting for office-mcp on port 8080..."
           for i in $(seq 1 18); do
-            if curl -sf "http://localhost:${PORT}/health" > /dev/null; then
+            if curl -sf "http://localhost:8080/health" > /dev/null; then
               echo "office-mcp healthy (attempt $i)"
               break
             fi
@@ -134,11 +122,9 @@ jobs:
 
       - name: Wait for LibreChat health
         run: |
-          PORT=$(grep '^LIBRECHAT_PORT=' .env | cut -d= -f2 | tr -d '\r')
-          PORT="${PORT:-3080}"
-          echo "Waiting for LibreChat on port $PORT..."
+          echo "Waiting for LibreChat on port 3080..."
           for i in $(seq 1 30); do
-            if curl -sf "http://localhost:${PORT}/api/config" > /dev/null; then
+            if curl -sf "http://localhost:3080/api/config" > /dev/null; then
               echo "LibreChat healthy (attempt $i)"
               exit 0
             fi
@@ -151,17 +137,13 @@ jobs:
 
       - name: Smoke tests
         run: |
-          MPORT=$(grep '^OFFICE_MCP_PORT=' .env | cut -d= -f2 | tr -d '\r')
-          MPORT="${MPORT:-8080}"
-          LPORT=$(grep '^LIBRECHAT_PORT=' .env | cut -d= -f2 | tr -d '\r')
-          LPORT="${LPORT:-3080}"
           FAILED=0
 
-          curl -sf "http://localhost:${MPORT}/health" | grep -q '"status":"ok"' \
+          curl -sf "http://localhost:8080/health" | grep -q '"status":"ok"' \
             && echo "PASS  office-mcp /health" \
             || { echo "FAIL  office-mcp /health"; FAILED=1; }
 
-          curl -sf "http://localhost:${LPORT}/api/config" | grep -q '"appTitle"' \
+          curl -sf "http://localhost:3080/api/config" | grep -q '"appTitle"' \
             && echo "PASS  LibreChat /api/config" \
             || { echo "FAIL  LibreChat /api/config"; FAILED=1; }
 
