@@ -1,0 +1,29 @@
+version: 1.2.0
+cache: true
+
+mcpSettings:
+  # MCP servers using internal IPs/local domains MUST be allow-listed here,
+  # otherwise LibreChat blocks the call as SSRF.
+  allowedDomains:
+    - "office-mcp"
+
+mcpServers:
+  office:
+    type: streamable-http
+    url: http://office-mcp:8080/mcp
+    timeout: 120000
+    initTimeout: 15000
+    chatMenu: true
+    title: "Office Documents"
+    description: "Create and edit Word, Excel, PowerPoint documents."
+    headers:
+      Authorization: "Bearer ${OFFICE_MCP_TOKEN}"
+      X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
+      X-LibreChat-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
+    serverInstructions: |
+      This MCP exposes tools to create and edit Office documents (.docx, .xlsx, .pptx).
+      Workflow rules:
+        1. Before creating a document, read office://rules/<format> for formatting conventions.
+        2. Prefer templates when possible — list them with office://templates/list.
+        3. Files are addressed by abstract URI (local://, sp://, od://, s3://, az://).
+        4. Always return the file_uri to the user so they can retrieve it.

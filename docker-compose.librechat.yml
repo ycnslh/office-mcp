@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────
+# Dev stack — LibreChat v0.8.4 + dependencies + office-mcp.
+# Use it to test the full integration locally:
+#   1. cp .env.example .env  &&  fill CREDS_KEY / CREDS_IV / JWT_*
+#   2. docker compose -f docker-compose.yml -f docker-compose.librechat.yml up
+#   3. Open http://localhost:3080
+#
+# In production, copy librechat.yaml.example into your real LibreChat
+# project and reuse `docker-compose.librechat.override.yml.example` instead.
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: office-mcp-mongodb
+    restart: unless-stopped
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - office-mcp
+    command: mongod --noauth
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.12.3
+    container_name: office-mcp-meilisearch
+    restart: unless-stopped
+    environment:
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_NO_ANALYTICS=true
+    volumes:
+      - meili-data:/meili_data
+    networks:
+      - office-mcp
+
+  librechat:
+    image: ghcr.io/danny-avila/librechat:${LIBRECHAT_VERSION:-v0.8.4}
+    container_name: librechat
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - meilisearch
+      - office-mcp
+    ports:
+      - "${LIBRECHAT_PORT:-3080}:3080"
+    environment:
+      - HOST=0.0.0.0
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_NO_ANALYTICS=true
+      - CREDS_KEY=${CREDS_KEY}
+      - CREDS_IV=${CREDS_IV}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
+      - ALLOW_REGISTRATION=true
+    volumes:
+      - ./librechat.yaml.example:/app/librechat.yaml:ro
+      - librechat-images:/app/client/public/images
+      - librechat-uploads:/app/uploads
+    networks:
+      - office-mcp
+
+volumes:
+  mongodb-data:
+  meili-data:
+  librechat-images:
+  librechat-uploads:

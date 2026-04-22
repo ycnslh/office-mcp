@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Poetry
+poetry.lock.bak
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+data/
+output/
+tmp/
+*.log
+
+# Generated office artefacts (test fixtures stay tracked)
+*.docx
+*.xlsx
+*.pptx
+*.pdf
+!tests/**/fixtures/**/*.docx
+!tests/**/fixtures/**/*.xlsx
+!tests/**/fixtures/**/*.pptx
+!src/office_mcp/templates/**/*.docx
+!src/office_mcp/templates/**/*.pptx
+
+# LibreChat dev stack volumes
+librechat-data/
+mongodb-data/
+meili-data/
