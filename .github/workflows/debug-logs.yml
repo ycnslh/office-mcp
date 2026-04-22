@@ -1,0 +1,40 @@
+name: Debug — dump LibreChat logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: self-hosted
+    steps:
+      - name: Container status
+        run: docker ps --filter name=librechat --filter name=office-mcp --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+      - name: Effective librechat.yaml inside the container
+        run: |
+          echo "── /app/librechat.yaml ─────────────────────────────"
+          docker exec librechat sh -c "cat /app/librechat.yaml" || true
+
+      - name: MINIMAX_* env vars seen by LibreChat
+        run: |
+          docker exec librechat sh -c 'env | grep -i ^MINIMAX | sed "s/\(MINIMAX_API_KEY=\).*/\1<redacted>/"' || true
+
+      - name: LibreChat — last 200 log lines
+        run: docker logs librechat --tail 200 2>&1 || true
+
+      - name: office-mcp — last 100 log lines
+        run: docker logs office-mcp --tail 100 2>&1 || true
+
+      - name: Probe MiniMax from inside the LibreChat container
+        run: |
+          docker exec librechat sh -c '
+            apk add --no-cache curl >/dev/null 2>&1 || apt-get install -y curl >/dev/null 2>&1 || true
+            curl -sS -o /tmp/mm.json -w "HTTP %{http_code}\n" \
+              -H "Authorization: Bearer $MINIMAX_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"model\":\"$MINIMAX_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" \
+              "$MINIMAX_BASE_URL/chat/completions"
+            echo "── response body (first 500 chars) ───────────────"
+            head -c 500 /tmp/mm.json
+            echo
+          ' || true
