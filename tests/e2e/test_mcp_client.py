@@ -76,5 +76,15 @@ async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
         assert init.serverInfo.name == "office-mcp"
 
         tools = await session.list_tools()
-        # Phase 2 ships zero tools — surface validates by returning an empty list.
-        assert tools.tools == []
+        tool_names = {t.name for t in tools.tools}
+        # Phase 3 ships the four core docx tools.
+        assert {
+            "docx_create",
+            "docx_read",
+            "docx_append_section",
+            "docx_insert_table",
+        }.issubset(tool_names)
+
+        resources = await session.list_resources()
+        resource_uris = {str(r.uri) for r in resources.resources}
+        assert "office://rules/docx" in resource_uris

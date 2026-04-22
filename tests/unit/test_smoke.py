@@ -22,7 +22,7 @@ def test_health_endpoint() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["mcp_ready"] is True
-    assert payload["phase"].startswith("2-")
+    assert payload["phase"].startswith("3-")
     assert "version" in payload
 
 

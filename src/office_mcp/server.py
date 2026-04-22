@@ -12,14 +12,15 @@ Middleware (outermost → innermost):
                              ``X-LibreChat-User-Email`` into a ContextVar
                              that tools read via :func:`current_user`.
 
-Tools and resources are registered by their respective modules in later
-phases. This module only stands up the transport.
+Tools and resources self-register through ``@mcp.tool`` /
+``@mcp.resource`` decorators in ``office_mcp.tools`` and
+``office_mcp.resources``. ``build_app()`` imports those modules so the
+registrations happen before the FastMCP HTTP app is materialised.
 """
 
 from __future__ import annotations
 
 import uvicorn
-from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -27,8 +28,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from office_mcp import __version__
 from office_mcp.config import Settings
 from office_mcp.context import UserContext, bind_user
-
-mcp: FastMCP = FastMCP("office-mcp")
+from office_mcp.runtime import mcp, set_registry
+from office_mcp.storage import LocalBackend, StorageRegistry
 
 
 # ── HTTP routes ────────────────────────────────────────────────────────
@@ -40,7 +41,7 @@ async def _health(_: Request) -> JSONResponse:
         {
             "status": "ok",
             "version": __version__,
-            "phase": "2-mcp-wired",
+            "phase": "3-docx-tools",
             "mcp_ready": True,
         }
     )
@@ -116,10 +117,37 @@ async def _reject(send: Send, status: int, body: bytes) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+# ── Bootstrap ──────────────────────────────────────────────────────────
+
+
+_BOOTSTRAPPED = False
+
+
+def _bootstrap(settings: Settings) -> None:
+    """Wire the default registry and import tool/resource modules once.
+
+    Idempotent: safe to call from both :func:`run` and :func:`build_app`.
+    """
+    global _BOOTSTRAPPED
+    registry = StorageRegistry()
+    registry.register(LocalBackend(root=settings.local_root))
+    set_registry(registry)
+
+    if _BOOTSTRAPPED:
+        return
+    # Importing these modules triggers the @mcp.tool / @mcp.resource
+    # decorators that register the surface with the FastMCP instance.
+    from office_mcp.resources import rules  # noqa: F401
+    from office_mcp.tools import docx_tools  # noqa: F401
+
+    _BOOTSTRAPPED = True
+
+
 # ── App factory ────────────────────────────────────────────────────────
 
 
 def build_app(settings: Settings) -> ASGIApp:
+    _bootstrap(settings)
     app = mcp.http_app(path="/mcp")
     app.add_middleware(UserContextMiddleware)
     app.add_middleware(BearerAuthMiddleware, expected_token=settings.token)
