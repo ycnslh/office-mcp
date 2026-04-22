@@ -22,3 +22,9 @@ def _load(name: str) -> str:
 def docx_rules() -> str:
     """Formatting rules and conventions for Word documents."""
     return _load("docx_rules.md")
+
+
+@mcp.resource("office://rules/xlsx", mime_type="text/markdown")
+def xlsx_rules() -> str:
+    """Formatting rules and conventions for Excel spreadsheets."""
+    return _load("xlsx_rules.md")

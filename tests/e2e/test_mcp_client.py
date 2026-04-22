@@ -83,14 +83,19 @@ async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
 
         tools = await session.list_tools()
         tool_names = {t.name for t in tools.tools}
-        # Phase 3 ships the four core docx tools.
+        # Phase 3 docx + Phase 4 xlsx tools are all registered.
         assert {
             "docx_create",
             "docx_read",
             "docx_append_section",
             "docx_insert_table",
+            "xlsx_create",
+            "xlsx_read_range",
+            "xlsx_write_range",
+            "xlsx_apply_formula",
         }.issubset(tool_names)
 
         resources = await session.list_resources()
         resource_uris = {str(r.uri) for r in resources.resources}
         assert "office://rules/docx" in resource_uris
+        assert "office://rules/xlsx" in resource_uris

@@ -43,7 +43,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     OFFICE_MCP_LOCAL_ROOT=/data
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
+ && apt-get install -y --no-install-recommends \
+      curl \
+      libreoffice-calc \
+      libreoffice-writer \
+      libreoffice-impress \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system app \
  && useradd --system --gid app --create-home --home-dir /home/app app \
