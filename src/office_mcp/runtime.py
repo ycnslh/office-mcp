@@ -10,7 +10,28 @@ from fastmcp import FastMCP
 
 from office_mcp.storage import StorageRegistry
 
-mcp: FastMCP = FastMCP("office-mcp")
+_INSTRUCTIONS = """\
+office-mcp creates and edits Word, Excel and PowerPoint documents.
+
+ADDRESSING FILES
+  Every tool takes a `file_uri` like `local://path/to/file.ext`.
+  In this deployment, ONLY the `local://` scheme is wired — do not invent
+  `s3://`, `az://`, `sp://` or `od://` URIs (Phases 7-8 will add them).
+  Path components are scoped per user, so a leading `/` is unnecessary.
+
+WORKFLOW
+  1. Before creating a document, consult the matching `office://rules/<format>`
+     resource (docx, xlsx) for formatting conventions.
+  2. Compose the document with the granular tools (create → write/append →
+     read to verify).
+  3. Always echo the resulting `file_uri` to the user so they can retrieve it.
+
+ERROR HANDLING
+  If a tool returns an UnknownSchemeError or InvalidUriError, RE-CALL the
+  tool with `local://...` instead of guessing another scheme.
+"""
+
+mcp: FastMCP = FastMCP("office-mcp", instructions=_INSTRUCTIONS)
 
 _registry: StorageRegistry | None = None
 

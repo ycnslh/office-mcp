@@ -41,6 +41,8 @@ mcpServers:
       This MCP exposes tools to create and edit Office documents (.docx, .xlsx, .pptx).
       Workflow rules:
         1. Before creating a document, read office://rules/<format> for formatting conventions.
-        2. Prefer templates when possible — list them with office://templates/list.
-        3. Files are addressed by abstract URI (local://, sp://, od://, s3://, az://).
-        4. Always return the file_uri to the user so they can retrieve it.
+        2. Files are addressed by URI. The CURRENT deployment only wires the
+           `local://` scheme — do NOT use `s3://`, `az://`, `sp://`, `od://` URIs;
+           those backends are not yet enabled. Example: `local://reports/q3.docx`.
+        3. Always echo the resulting file_uri to the user so they can retrieve it.
+        4. If a tool errors with UnknownSchemeError, retry with `local://...`.
