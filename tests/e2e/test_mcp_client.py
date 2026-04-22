@@ -30,9 +30,15 @@ def _free_port() -> int:
 
 
 @pytest.fixture
-def running_server() -> Iterator[str]:
+def running_server(tmp_path) -> Iterator[str]:  # type: ignore[no-untyped-def]
     port = _free_port()
-    settings = Settings(host="127.0.0.1", port=port, token=None, log_level="warning")
+    settings = Settings(
+        host="127.0.0.1",
+        port=port,
+        token=None,
+        log_level="warning",
+        local_root=tmp_path,
+    )
     config = uvicorn.Config(
         build_app(settings),
         host="127.0.0.1",

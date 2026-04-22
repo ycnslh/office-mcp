@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from starlette.testclient import TestClient
 
 from office_mcp.config import Settings
@@ -14,8 +16,9 @@ def test_package_imports() -> None:
     assert office_mcp.__version__
 
 
-def test_health_endpoint() -> None:
-    with TestClient(build_app(Settings(token=None))) as client:
+def test_health_endpoint(tmp_path: Path) -> None:
+    settings = Settings(token=None, local_root=tmp_path)
+    with TestClient(build_app(settings)) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
@@ -26,9 +29,10 @@ def test_health_endpoint() -> None:
     assert "version" in payload
 
 
-def test_health_reachable_even_with_bearer_configured() -> None:
+def test_health_reachable_even_with_bearer_configured(tmp_path: Path) -> None:
     """The healthcheck must NEVER require a token (Docker probes don't have one)."""
-    with TestClient(build_app(Settings(token="some-token"))) as client:
+    settings = Settings(token="some-token", local_root=tmp_path)
+    with TestClient(build_app(settings)) as client:
         response = client.get("/health")
 
     assert response.status_code == 200

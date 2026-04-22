@@ -3,6 +3,10 @@
 Each tool returns a small dict keyed on ``file_uri`` so the calling LLM can
 surface the result to the user and chain further edits without juggling
 opaque handles.
+
+Registration is done at the bottom of the module via ``mcp.tool(fn)`` so the
+module-level names remain plain async functions — callable directly from
+tests without going through the FastMCP transport.
 """
 
 from __future__ import annotations
@@ -14,7 +18,6 @@ from office_mcp.engines import docx_engine
 from office_mcp.runtime import get_registry, mcp
 
 
-@mcp.tool
 async def docx_create(file_uri: str, title: str | None = None) -> dict[str, Any]:
     """Create a new, empty Word document at ``file_uri``.
 
@@ -40,7 +43,6 @@ async def docx_create(file_uri: str, title: str | None = None) -> dict[str, Any]
     }
 
 
-@mcp.tool
 async def docx_read(file_uri: str) -> dict[str, Any]:
     """Read a Word document and return its structured content.
 
@@ -62,7 +64,6 @@ async def docx_read(file_uri: str) -> dict[str, Any]:
     }
 
 
-@mcp.tool
 async def docx_append_section(
     file_uri: str,
     heading: str,
@@ -95,7 +96,6 @@ async def docx_append_section(
     }
 
 
-@mcp.tool
 async def docx_insert_table(
     file_uri: str,
     headers: list[str],
@@ -121,3 +121,10 @@ async def docx_insert_table(
             f"Inserted {len(rows)}×{len(headers)} table into {meta.uri}"
         ),
     }
+
+
+# Register with FastMCP. Done imperatively so the module-level names above
+# remain plain async functions (the @mcp.tool decorator wraps them in a
+# FunctionTool that is not directly callable).
+for _fn in (docx_create, docx_read, docx_append_section, docx_insert_table):
+    mcp.tool(_fn)
