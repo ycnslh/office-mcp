@@ -31,7 +31,6 @@ from office_mcp.context import UserContext, bind_user
 from office_mcp.runtime import mcp, set_registry
 from office_mcp.storage import LocalBackend, StorageRegistry
 
-
 # ── HTTP routes ────────────────────────────────────────────────────────
 
 
