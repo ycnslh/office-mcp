@@ -10,12 +10,12 @@ endpoints:
   custom:
     - name: "MiniMax"
       apiKey: "${MINIMAX_API_KEY}"
-      baseURL: "${MINIMAX_BASE_URL}"
+      baseURL: "https://api.minimax.io/v1"
       models:
-        default: ["${MINIMAX_MODEL}"]
+        default: ["MiniMax-M2.7"]
         fetch: false
       titleConvo: true
-      titleModel: "${MINIMAX_MODEL}"
+      titleModel: "MiniMax-M2.7"
       modelDisplayLabel: "MiniMax"
 
 mcpSettings:
