@@ -68,11 +68,13 @@ def running_server() -> Iterator[str]:
 
 @pytest.mark.asyncio
 async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
-    async with streamablehttp_client(f"{running_server}/mcp") as (read, write, _):
-        async with ClientSession(read, write) as session:
-            init: Any = await session.initialize()
-            assert init.serverInfo.name == "office-mcp"
+    async with (
+        streamablehttp_client(f"{running_server}/mcp") as (read, write, _),
+        ClientSession(read, write) as session,
+    ):
+        init: Any = await session.initialize()
+        assert init.serverInfo.name == "office-mcp"
 
-            tools = await session.list_tools()
-            # Phase 2 ships zero tools — surface validates by returning an empty list.
-            assert tools.tools == []
+        tools = await session.list_tools()
+        # Phase 2 ships zero tools — surface validates by returning an empty list.
+        assert tools.tools == []
