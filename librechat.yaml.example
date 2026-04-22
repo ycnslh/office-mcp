@@ -1,6 +1,23 @@
 version: 1.2.0
 cache: true
 
+# ──────────────────────────────────────────────────────────────────────
+# LLM providers — MiniMax via OpenAI-compatible API.
+# Plan token is injected at deploy time from the MINIMAX_API_KEY secret;
+# users do NOT need to enter it through the LibreChat UI.
+# ──────────────────────────────────────────────────────────────────────
+endpoints:
+  custom:
+    - name: "MiniMax"
+      apiKey: "${MINIMAX_API_KEY}"
+      baseURL: "${MINIMAX_BASE_URL}"
+      models:
+        default: ["${MINIMAX_MODEL}"]
+        fetch: false
+      titleConvo: true
+      titleModel: "${MINIMAX_MODEL}"
+      modelDisplayLabel: "MiniMax"
+
 mcpSettings:
   # MCP servers using internal IPs/local domains MUST be allow-listed here,
   # otherwise LibreChat blocks the call as SSRF.

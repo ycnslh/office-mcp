@@ -1,0 +1,173 @@
+name: CI/CD office-mcp
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Unit tests ────────────────────────────────────────────────────────────
+  test:
+    name: Unit tests
+    runs-on: self-hosted
+    steps:
+      - name: Clean root-owned caches from previous runs
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            python:3.12-slim \
+            sh -c "find /workspace -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache -o -name .venv \) -exec rm -rf {} + 2>/dev/null; exit 0"
+
+      - uses: actions/checkout@v4
+
+      - name: Install + lint + test
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            --env HOME=/tmp \
+            --env POETRY_VIRTUALENVS_IN_PROJECT=true \
+            --env POETRY_NO_INTERACTION=1 \
+            -v ${{ github.workspace }}:/app \
+            -w /app \
+            python:3.12-slim \
+            sh -c "pip install -q poetry==1.8.4 \
+              && poetry install --with dev --no-ansi \
+              && poetry run ruff check . \
+              && poetry run pytest -v --tb=short -p no:cacheprovider"
+
+  # ─── Deploy (main branch only, after tests pass) ──────────────────────────
+  deploy:
+    name: Deploy
+    runs-on: self-hosted
+    environment: production
+    needs: [test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate .env
+        run: |
+          {
+            # office-mcp core
+            echo "OFFICE_MCP_HOST=0.0.0.0"
+            echo "OFFICE_MCP_PORT=${{ vars.OFFICE_MCP_PORT }}"
+            echo "OFFICE_MCP_LOG_LEVEL=${{ vars.OFFICE_MCP_LOG_LEVEL }}"
+            echo "OFFICE_MCP_TOKEN=${{ secrets.OFFICE_MCP_TOKEN }}"
+            echo "OFFICE_MCP_LOCAL_ROOT=/data"
+            echo "OFFICE_MCP_MAX_FILE_SIZE_MB=${{ vars.OFFICE_MCP_MAX_FILE_SIZE_MB }}"
+            echo "OFFICE_MCP_RATE_LIMIT_PER_MIN=${{ vars.OFFICE_MCP_RATE_LIMIT_PER_MIN }}"
+
+            # Storage backends — only injected if the secret/var is set
+            echo "GRAPH_TENANT_ID=${{ secrets.GRAPH_TENANT_ID }}"
+            echo "GRAPH_CLIENT_ID=${{ secrets.GRAPH_CLIENT_ID }}"
+            echo "GRAPH_CLIENT_SECRET=${{ secrets.GRAPH_CLIENT_SECRET }}"
+            echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"
+            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            echo "AWS_REGION=${{ vars.AWS_REGION }}"
+            echo "AZURE_STORAGE_CONNECTION_STRING=${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}"
+
+            # LibreChat dev stack
+            echo "LIBRECHAT_VERSION=${{ vars.LIBRECHAT_VERSION }}"
+            echo "LIBRECHAT_PORT=${{ vars.LIBRECHAT_PORT }}"
+            echo "CREDS_KEY=${{ secrets.CREDS_KEY }}"
+            echo "CREDS_IV=${{ secrets.CREDS_IV }}"
+            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}"
+            echo "JWT_REFRESH_SECRET=${{ secrets.JWT_REFRESH_SECRET }}"
+
+            # MiniMax LLM
+            echo "MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }}"
+            echo "MINIMAX_BASE_URL=${{ vars.MINIMAX_BASE_URL }}"
+            echo "MINIMAX_MODEL=${{ vars.MINIMAX_MODEL }}"
+          } > .env
+
+      - name: Validate required env vars
+        run: |
+          for key in OFFICE_MCP_TOKEN OFFICE_MCP_PORT \
+                    CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET \
+                    MINIMAX_API_KEY MINIMAX_MODEL; do
+            val=$(grep "^${key}=" .env | cut -d= -f2-)
+            if [ -z "$val" ]; then
+              echo "Missing required env var: $key"
+              exit 1
+            fi
+          done
+          echo ".env validated"
+
+      - name: Stop existing containers
+        run: |
+          docker stop office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+          docker rm  office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+
+      - name: Build and start full stack
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build -d
+
+      - name: Wait for office-mcp health
+        run: |
+          PORT=$(grep '^OFFICE_MCP_PORT=' .env | cut -d= -f2 | tr -d '\r')
+          PORT="${PORT:-8080}"
+          echo "Waiting for office-mcp on port $PORT..."
+          for i in $(seq 1 18); do
+            if curl -sf "http://localhost:${PORT}/health" > /dev/null; then
+              echo "office-mcp healthy (attempt $i)"
+              break
+            fi
+            echo "  attempt $i/18, retrying in 10s..."
+            sleep 10
+            if [ $i -eq 18 ]; then
+              echo "office-mcp did not become healthy within 3 minutes"
+              docker compose -f docker-compose.yml -f docker-compose.librechat.yml logs office-mcp
+              exit 1
+            fi
+          done
+
+      - name: Wait for LibreChat health
+        run: |
+          PORT=$(grep '^LIBRECHAT_PORT=' .env | cut -d= -f2 | tr -d '\r')
+          PORT="${PORT:-3080}"
+          echo "Waiting for LibreChat on port $PORT..."
+          for i in $(seq 1 30); do
+            if curl -sf "http://localhost:${PORT}/api/config" > /dev/null; then
+              echo "LibreChat healthy (attempt $i)"
+              exit 0
+            fi
+            echo "  attempt $i/30, retrying in 10s..."
+            sleep 10
+          done
+          echo "LibreChat did not become healthy within 5 minutes"
+          docker compose -f docker-compose.yml -f docker-compose.librechat.yml logs librechat
+          exit 1
+
+      - name: Smoke tests
+        run: |
+          MPORT=$(grep '^OFFICE_MCP_PORT=' .env | cut -d= -f2 | tr -d '\r')
+          MPORT="${MPORT:-8080}"
+          LPORT=$(grep '^LIBRECHAT_PORT=' .env | cut -d= -f2 | tr -d '\r')
+          LPORT="${LPORT:-3080}"
+          FAILED=0
+
+          curl -sf "http://localhost:${MPORT}/health" | grep -q '"status":"ok"' \
+            && echo "PASS  office-mcp /health" \
+            || { echo "FAIL  office-mcp /health"; FAILED=1; }
+
+          curl -sf "http://localhost:${LPORT}/api/config" | grep -q '"appTitle"' \
+            && echo "PASS  LibreChat /api/config" \
+            || { echo "FAIL  LibreChat /api/config"; FAILED=1; }
+
+          [ $FAILED -eq 0 ] || exit 1
+          echo "All smoke tests passed"
+
+      - name: Container status
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml ps

@@ -53,6 +53,10 @@ services:
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
       - ALLOW_REGISTRATION=true
+      # MiniMax custom endpoint (read by librechat.yaml ${...} placeholders)
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimax.io/v1}
+      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
     volumes:
       - ./librechat.yaml.example:/app/librechat.yaml:ro
       - librechat-images:/app/client/public/images
