@@ -1,11 +1,11 @@
-"""Phase 0 smoke tests — package imports and the /health endpoint responds.
-
-Real test suites land alongside their features in Phases 1+.
-"""
+"""Smoke tests — package import + /health endpoint shape."""
 
 from __future__ import annotations
 
 from starlette.testclient import TestClient
+
+from office_mcp.config import Settings
+from office_mcp.server import build_app
 
 
 def test_package_imports() -> None:
@@ -15,13 +15,20 @@ def test_package_imports() -> None:
 
 
 def test_health_endpoint() -> None:
-    from office_mcp.server import build_app
-
-    with TestClient(build_app()) as client:
+    with TestClient(build_app(Settings(token=None))) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert payload["mcp_ready"] is False
+    assert payload["mcp_ready"] is True
+    assert payload["phase"].startswith("2-")
     assert "version" in payload
+
+
+def test_health_reachable_even_with_bearer_configured() -> None:
+    """The healthcheck must NEVER require a token (Docker probes don't have one)."""
+    with TestClient(build_app(Settings(token="some-token"))) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
