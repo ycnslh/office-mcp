@@ -14,7 +14,9 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080"
+      # Host port 18080 (8080 is often taken on dev/CI runners).
+      # Inside the docker network LibreChat still reaches office-mcp on :8080.
+      - "18080:8080"
     volumes:
       - office_mcp_data:/data
     restart: unless-stopped

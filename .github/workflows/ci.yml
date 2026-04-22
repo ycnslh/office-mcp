@@ -106,9 +106,9 @@ jobs:
 
       - name: Wait for office-mcp health
         run: |
-          echo "Waiting for office-mcp on port 8080..."
+          echo "Waiting for office-mcp on host port 18080..."
           for i in $(seq 1 18); do
-            if curl -sf "http://localhost:8080/health" > /dev/null; then
+            if curl -sf "http://localhost:18080/health" > /dev/null; then
               echo "office-mcp healthy (attempt $i)"
               break
             fi
@@ -140,7 +140,7 @@ jobs:
         run: |
           FAILED=0
 
-          curl -sf "http://localhost:8080/health" | grep -q '"status":"ok"' \
+          curl -sf "http://localhost:18080/health" | grep -q '"status":"ok"' \
             && echo "PASS  office-mcp /health" \
             || { echo "FAIL  office-mcp /health"; FAILED=1; }
 

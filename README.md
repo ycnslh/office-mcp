@@ -26,7 +26,7 @@ docker compose up --build
 
 # 3. Full dev stack with LibreChat 0.8.4
 docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build
-#   → office-mcp  : http://localhost:8080
+#   → office-mcp  : http://localhost:18080
 #   → LibreChat   : http://localhost:3080  (register a user, then chat)
 ```
 
