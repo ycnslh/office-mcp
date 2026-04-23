@@ -139,6 +139,17 @@ async def test_bearer_auth_lets_health_through_without_token() -> None:
     assert response.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_bearer_auth_lets_files_endpoint_through_without_token() -> None:
+    """`/files/{token}` carries its own auth in the HMAC-signed path token."""
+    app = _app(
+        Middleware(BearerAuthMiddleware, expected_token="s3cr3t"),
+        routes=[Route("/files/{token}", _ok)],
+    )
+    response = await _get(app, "/files/any-token-value")
+    assert response.status_code == 200
+
+
 # ── Stacking order matches build_app() ───────────────────────────────
 
 

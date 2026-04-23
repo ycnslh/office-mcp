@@ -105,7 +105,10 @@ class BearerAuthMiddleware:
         if scope["type"] != "http" or self._expected is None:
             await self.app(scope, receive, send)
             return
-        if scope.get("path") == "/health":
+        path = scope.get("path", "")
+        # /health: Docker probes don't send the bearer.
+        # /files/*: its own per-request auth lives in the HMAC-signed token.
+        if path == "/health" or path.startswith("/files/"):
             await self.app(scope, receive, send)
             return
         auth = _header(scope, b"authorization")
