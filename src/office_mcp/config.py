@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 50
     rate_limit_per_min: int = 60
 
+    default_user_id: str = "demo-user"
+    """Fallback user scope used when the client did not send a usable
+    ``X-LibreChat-User-Id`` header — or sent a literal ``{{...}}`` placeholder
+    because LibreChat 0.8.4 does not substitute headers in chat mode
+    (see danny-avila/LibreChat#9910). Set to a non-generic value in multi-user
+    deployments to force clients to supply a real user id.
+    """
+
     model_config = SettingsConfigDict(
         env_prefix="OFFICE_MCP_",
         env_file=".env",

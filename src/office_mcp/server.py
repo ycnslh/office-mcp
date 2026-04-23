@@ -80,22 +80,36 @@ class BearerAuthMiddleware:
 
 
 class UserContextMiddleware:
-    """Bind a :class:`UserContext` from LibreChat headers for the request."""
+    """Bind a :class:`UserContext` from LibreChat headers for the request.
 
-    def __init__(self, app: ASGIApp) -> None:
+    Falls back to ``fallback_user_id`` when the incoming header is missing or
+    is a literal ``{{...}}`` placeholder — LibreChat 0.8.4 does not substitute
+    header placeholders in chat mode (upstream bug #9910), so without this
+    fallback the whole MCP surface is unreachable from a plain chat.
+    """
+
+    def __init__(self, app: ASGIApp, fallback_user_id: str = "demo-user") -> None:
         self.app = app
+        self._fallback = fallback_user_id
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        user_id = _header(scope, b"x-librechat-user-id")
-        if not user_id:
-            await self.app(scope, receive, send)
-            return
-        email = _header(scope, b"x-librechat-user-email") or None
+        raw_user = _header(scope, b"x-librechat-user-id")
+        raw_email = _header(scope, b"x-librechat-user-email")
+        user_id = raw_user if _looks_like_real_id(raw_user) else self._fallback
+        email = raw_email if _looks_like_real_id(raw_email) else None
         with bind_user(UserContext(user_id=user_id, email=email)):
             await self.app(scope, receive, send)
+
+
+def _looks_like_real_id(value: str) -> bool:
+    """True if *value* is non-empty and not a literal ``{{...}}`` placeholder."""
+    if not value:
+        return False
+    stripped = value.strip()
+    return not (stripped.startswith("{{") and stripped.endswith("}}"))
 
 
 def _header(scope: Scope, name: bytes) -> str:
@@ -148,7 +162,7 @@ def _bootstrap(settings: Settings) -> None:
 def build_app(settings: Settings) -> ASGIApp:
     _bootstrap(settings)
     app = mcp.http_app(path="/mcp")
-    app.add_middleware(UserContextMiddleware)
+    app.add_middleware(UserContextMiddleware, fallback_user_id=settings.default_user_id)
     app.add_middleware(BearerAuthMiddleware, expected_token=settings.token)
     return app
 

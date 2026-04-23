@@ -64,10 +64,25 @@ async def test_user_context_extracted_from_headers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_context_absent_when_header_missing() -> None:
-    app = _app(Middleware(UserContextMiddleware))
+async def test_user_context_falls_back_when_header_missing() -> None:
+    app = _app(Middleware(UserContextMiddleware, fallback_user_id="demo-user"))
     response = await _get(app, "/whoami")
-    assert response.json() == {"user_id": None, "email": None}
+    assert response.json() == {"user_id": "demo-user", "email": None}
+
+
+@pytest.mark.asyncio
+async def test_user_context_falls_back_on_unsubstituted_placeholder() -> None:
+    """LibreChat 0.8.4 forwards {{LIBRECHAT_USER_ID}} literally — treat as missing."""
+    app = _app(Middleware(UserContextMiddleware, fallback_user_id="demo-user"))
+    response = await _get(
+        app,
+        "/whoami",
+        headers={
+            "X-LibreChat-User-Id": "{{LIBRECHAT_USER_ID}}",
+            "X-LibreChat-User-Email": "{{LIBRECHAT_USER_EMAIL}}",
+        },
+    )
+    assert response.json() == {"user_id": "demo-user", "email": None}
 
 
 @pytest.mark.asyncio
