@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────
+# Drop-in override for an existing LibreChat docker-compose project.
+#
+# Copy this file into the directory that holds the client's
+# docker-compose.yml and rename it `docker-compose.override.yml` (or
+# include it explicitly with `-f`). It adds the office-mcp service and
+# wires the LibreChat api container to reach it on the shared network.
+#
+# Required one-time prep on the host:
+#   cd <office-mcp repo>
+#   docker build -t office-mcp:latest .
+#   # or push the image to a registry the host can pull from
+#
+# Then in the client's LibreChat project:
+#   cp librechat.yaml.example librechat.yaml
+#   # (copy the `mcpServers.office` + `endpoints.custom.MiniMax` blocks)
+#   cp docker-compose.librechat.override.yml.example docker-compose.override.yml
+#   # edit secrets / base URLs below
+#   docker compose up -d
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  office-mcp:
+    image: office-mcp:latest
+    container_name: office-mcp
+    restart: unless-stopped
+    environment:
+      - OFFICE_MCP_HOST=0.0.0.0
+      - OFFICE_MCP_PORT=8080
+      - OFFICE_MCP_LOG_LEVEL=INFO
+      - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
+      - OFFICE_MCP_LOCAL_ROOT=/data
+      - OFFICE_MCP_MAX_FILE_SIZE_MB=50
+      - OFFICE_MCP_RATE_LIMIT_PER_MIN=60
+      # Signed-URL downloads (so files generated in chat are clickable)
+      - OFFICE_MCP_SIGNING_SECRET=${OFFICE_MCP_TOKEN}
+      # Whatever hostname/port your users' browsers hit. NOT the internal
+      # container name — this URL is embedded in chat responses.
+      - OFFICE_MCP_DOWNLOAD_BASE_URL=${OFFICE_MCP_PUBLIC_URL:-http://localhost:18080}
+    volumes:
+      - office_mcp_data:/data
+    ports:
+      # 18080 on the host; 8080 internal to the docker network (matches
+      # the URL advertised to LibreChat in librechat.yaml).
+      - "18080:8080"
+    networks:
+      - librechat_default
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # LibreChat's existing `api` container gains the env block it needs to
+  # render the MiniMax custom endpoint and to mount the librechat.yaml
+  # that declares the office MCP server.
+  api:
+    environment:
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro
+    depends_on:
+      - office-mcp
+
+volumes:
+  office_mcp_data:
+
+networks:
+  # Must match the network LibreChat actually creates — in most installs
+  # it's `librechat_default`. Check with `docker network ls`.
+  librechat_default:
+    external: true

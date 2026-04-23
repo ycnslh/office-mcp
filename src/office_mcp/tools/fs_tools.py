@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from office_mcp.context import require_current_user
-from office_mcp.runtime import get_registry, mcp
+from office_mcp.runtime import build_download_url, get_registry, mcp
 
 
 async def fs_list(uri_prefix: str) -> dict[str, Any]:
@@ -32,6 +32,7 @@ async def fs_list(uri_prefix: str) -> dict[str, Any]:
                 "size_bytes": meta.size_bytes,
                 "modified_at": meta.modified_at,
                 "mime_type": meta.mime_type,
+                "download_url": build_download_url(meta.uri, user.user_id),
             }
         )
     return {
@@ -52,6 +53,7 @@ async def fs_stat(file_uri: str) -> dict[str, Any]:
         "modified_at": meta.modified_at,
         "etag": meta.etag,
         "mime_type": meta.mime_type,
+        "download_url": build_download_url(meta.uri, user.user_id),
     }
 
 
@@ -75,6 +77,7 @@ async def fs_copy(source_uri: str, destination_uri: str) -> dict[str, Any]:
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
+        "download_url": build_download_url(meta.uri, user.user_id),
         "summary": (
             f"Copied {source_uri} → {meta.uri} ({meta.size_bytes} bytes)"
         ),

@@ -16,7 +16,7 @@ from typing import Any
 
 from office_mcp.context import require_current_user
 from office_mcp.engines import docx_engine
-from office_mcp.runtime import get_registry, mcp
+from office_mcp.runtime import build_download_url, get_registry, mcp
 from office_mcp.utils import libreoffice
 
 
@@ -38,6 +38,7 @@ async def docx_create(file_uri: str, title: str | None = None) -> dict[str, Any]
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
+        "download_url": build_download_url(meta.uri, user.user_id),
         "summary": (
             f"Created document at {meta.uri}"
             + (f" with title {title!r}" if title else "")
@@ -91,6 +92,7 @@ async def docx_append_section(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
+        "download_url": build_download_url(meta.uri, user.user_id),
         "summary": (
             f"Appended H{level} section {heading!r} "
             f"({len(paragraphs)} paragraphs) to {meta.uri}"
@@ -119,6 +121,7 @@ async def docx_insert_table(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
+        "download_url": build_download_url(meta.uri, user.user_id),
         "summary": (
             f"Inserted {len(rows)}×{len(headers)} table into {meta.uri}"
         ),
@@ -156,6 +159,7 @@ async def docx_to_pdf(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
+        "download_url": build_download_url(meta.uri, user.user_id),
         "summary": (
             f"Rendered {file_uri} → {meta.uri} ({meta.size_bytes} bytes)"
         ),

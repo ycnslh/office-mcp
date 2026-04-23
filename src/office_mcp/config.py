@@ -33,6 +33,20 @@ class Settings(BaseSettings):
     deployments to force clients to supply a real user id.
     """
 
+    signing_secret: str | None = None
+    """HMAC key for signed ``/files/{token}`` download URLs. When unset, no
+    ``download_url`` is returned in tool responses. Typically set to the
+    same value as ``OFFICE_MCP_TOKEN``."""
+
+    download_base_url: str | None = None
+    """Externally-reachable base URL for the ``/files/{token}`` endpoint.
+    Example: ``http://pixel.lan:18080``. When unset, no ``download_url``
+    is returned."""
+
+    download_url_ttl_seconds: int = 900
+    """Lifetime of signed download tokens. Short values reduce replay risk;
+    long values tolerate slow readers. Default: 15 min."""
+
     model_config = SettingsConfigDict(
         env_prefix="OFFICE_MCP_",
         env_file=".env",

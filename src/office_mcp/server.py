@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import uvicorn
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from office_mcp import __version__
 from office_mcp.config import Settings
 from office_mcp.context import UserContext, bind_user
-from office_mcp.runtime import mcp, set_registry
+from office_mcp.runtime import mcp, set_registry, set_settings
 from office_mcp.storage import LocalBackend, StorageRegistry
+from office_mcp.utils import signing
+from office_mcp.utils.errors import StorageNotFoundError
 
 # ── HTTP routes ────────────────────────────────────────────────────────
 
@@ -40,9 +42,46 @@ async def _health(_: Request) -> JSONResponse:
         {
             "status": "ok",
             "version": __version__,
-            "phase": "6-fs-and-pdf",
+            "phase": "9-librechat-integration",
             "mcp_ready": True,
         }
+    )
+
+
+@mcp.custom_route("/files/{token}", methods=["GET"])
+async def _download(request: Request) -> Response:
+    """Serve a file referenced by a signed, user-scoped download token."""
+    from office_mcp.runtime import get_registry, get_settings
+
+    token = request.path_params["token"]
+    settings = get_settings()
+    if not settings.signing_secret:
+        return JSONResponse(
+            {"error": "downloads disabled (OFFICE_MCP_SIGNING_SECRET unset)"},
+            status_code=404,
+        )
+
+    try:
+        claims = signing.verify(token, secret=settings.signing_secret)
+    except signing.InvalidTokenError as exc:
+        return JSONResponse({"error": f"invalid token: {exc}"}, status_code=403)
+
+    user_ctx = UserContext(user_id=claims.user_id)
+    try:
+        backend = get_registry().get(claims.uri)
+        data = await backend.read(claims.uri, user_ctx=user_ctx)
+        meta = await backend.stat(claims.uri, user_ctx=user_ctx)
+    except StorageNotFoundError:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    filename = claims.uri.rsplit("/", 1)[-1] or "download"
+    return Response(
+        content=data,
+        media_type=meta.mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(meta.size_bytes),
+        },
     )
 
 
@@ -142,6 +181,7 @@ def _bootstrap(settings: Settings) -> None:
     Idempotent: safe to call from both :func:`run` and :func:`build_app`.
     """
     global _BOOTSTRAPPED
+    set_settings(settings)
     registry = StorageRegistry()
     registry.register(LocalBackend(root=settings.local_root))
     set_registry(registry)
