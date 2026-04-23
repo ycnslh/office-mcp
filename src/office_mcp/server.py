@@ -40,7 +40,7 @@ async def _health(_: Request) -> JSONResponse:
         {
             "status": "ok",
             "version": __version__,
-            "phase": "5-pptx-tools",
+            "phase": "6-fs-and-pdf",
             "mcp_ready": True,
         }
     )
@@ -151,7 +151,12 @@ def _bootstrap(settings: Settings) -> None:
     # Importing these modules triggers the @mcp.tool / @mcp.resource
     # decorators that register the surface with the FastMCP instance.
     from office_mcp.resources import rules  # noqa: F401
-    from office_mcp.tools import docx_tools, pptx_tools, xlsx_tools  # noqa: F401
+    from office_mcp.tools import (  # noqa: F401
+        docx_tools,
+        fs_tools,
+        pptx_tools,
+        xlsx_tools,
+    )
 
     _BOOTSTRAPPED = True
 

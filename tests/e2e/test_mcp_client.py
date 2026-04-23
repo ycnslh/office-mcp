@@ -83,12 +83,13 @@ async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
 
         tools = await session.list_tools()
         tool_names = {t.name for t in tools.tools}
-        # Phase 3 docx + Phase 4 xlsx + Phase 5 pptx tools are all registered.
+        # Phases 3-6: docx + xlsx + pptx + fs + docx_to_pdf.
         assert {
             "docx_create",
             "docx_read",
             "docx_append_section",
             "docx_insert_table",
+            "docx_to_pdf",
             "xlsx_create",
             "xlsx_read_range",
             "xlsx_write_range",
@@ -96,6 +97,10 @@ async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
             "pptx_create",
             "pptx_add_slide",
             "pptx_read",
+            "fs_list",
+            "fs_stat",
+            "fs_copy",
+            "fs_delete",
         }.issubset(tool_names)
 
         resources = await session.list_resources()

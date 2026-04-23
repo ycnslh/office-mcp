@@ -11,11 +11,13 @@ tests without going through the FastMCP transport.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from office_mcp.context import require_current_user
 from office_mcp.engines import docx_engine
 from office_mcp.runtime import get_registry, mcp
+from office_mcp.utils import libreoffice
 
 
 async def docx_create(file_uri: str, title: str | None = None) -> dict[str, Any]:
@@ -123,8 +125,65 @@ async def docx_insert_table(
     }
 
 
+async def docx_to_pdf(
+    file_uri: str,
+    output_uri: str | None = None,
+) -> dict[str, Any]:
+    """Render a Word document as PDF through headless LibreOffice.
+
+    Args:
+        file_uri: URI of the source ``.docx``.
+        output_uri: Where to write the PDF. Defaults to the source URI
+            with the extension swapped to ``.pdf``.
+
+    Returns the destination ``file_uri``, ``size_bytes`` and ``etag``.
+    """
+    user = require_current_user()
+    source_backend = get_registry().get(file_uri)
+    data = await source_backend.read(file_uri, user_ctx=user)
+
+    pdf_bytes = await asyncio.to_thread(
+        libreoffice.convert, data, src_ext="docx", dst_ext="pdf"
+    )
+
+    target_uri = output_uri or _swap_extension(file_uri, ".pdf")
+    destination_backend = get_registry().get(target_uri)
+    meta = await destination_backend.write(
+        target_uri, pdf_bytes, user_ctx=user
+    )
+    return {
+        "source_uri": file_uri,
+        "file_uri": meta.uri,
+        "size_bytes": meta.size_bytes,
+        "etag": meta.etag,
+        "summary": (
+            f"Rendered {file_uri} → {meta.uri} ({meta.size_bytes} bytes)"
+        ),
+    }
+
+
+def _swap_extension(uri: str, new_ext: str) -> str:
+    """Return ``uri`` with its file extension replaced by ``new_ext``.
+
+    If ``uri`` has no extension, ``new_ext`` is appended.
+    """
+    if not new_ext.startswith("."):
+        new_ext = "." + new_ext
+    dot = uri.rfind(".")
+    slash = uri.rfind("/")
+    if dot > slash:  # there is an extension after the last path separator
+        return uri[:dot] + new_ext
+    return uri + new_ext
+
+
 # Register with FastMCP. Done imperatively so the module-level names above
 # remain plain async functions (the @mcp.tool decorator wraps them in a
 # FunctionTool that is not directly callable).
-for _fn in (docx_create, docx_read, docx_append_section, docx_insert_table):
+for _fn in (
+    docx_create,
+    docx_read,
+    docx_append_section,
+    docx_insert_table,
+    docx_to_pdf,
+):
     mcp.tool(_fn)

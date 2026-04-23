@@ -15,10 +15,18 @@ from office_mcp.context import UserContext, bind_user
 from office_mcp.runtime import set_registry
 from office_mcp.storage import LocalBackend, StorageRegistry
 from office_mcp.tools.docx_tools import (
+    _swap_extension,
     docx_append_section,
     docx_create,
     docx_insert_table,
     docx_read,
+    docx_to_pdf,
+)
+from office_mcp.utils import libreoffice
+
+_NEEDS_SOFFICE = pytest.mark.skipif(
+    not libreoffice.is_available(),
+    reason="LibreOffice headless is not installed in this environment",
 )
 
 
@@ -108,3 +116,51 @@ async def test_docx_tools_require_user_context(registry: StorageRegistry) -> Non
     # No bind_user here — require_current_user must refuse.
     with pytest.raises(RuntimeError, match="No UserContext bound"):
         await docx_create("local://x.docx")
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        ("local://reports/q3.docx", "local://reports/q3.pdf"),
+        ("local://no-ext", "local://no-ext.pdf"),
+        ("local://path.with.dots/file.docx", "local://path.with.dots/file.pdf"),
+    ],
+)
+def test_swap_extension(uri: str, expected: str) -> None:
+    assert _swap_extension(uri, ".pdf") == expected
+
+
+@pytest.mark.asyncio
+@_NEEDS_SOFFICE
+async def test_docx_to_pdf_writes_valid_pdf(
+    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+) -> None:
+    await docx_create("local://reports/q3.docx", title="Q3 report")
+    await docx_append_section(
+        "local://reports/q3.docx",
+        heading="Intro",
+        paragraphs=["Quarterly highlights."],
+    )
+
+    result = await docx_to_pdf("local://reports/q3.docx")
+
+    assert result["file_uri"] == "local://reports/q3.pdf"
+    assert result["source_uri"] == "local://reports/q3.docx"
+    pdf_path = tmp_path / yacine.user_id / "reports" / "q3.pdf"
+    assert pdf_path.exists()
+    assert pdf_path.read_bytes().startswith(b"%PDF-")
+
+
+@pytest.mark.asyncio
+@_NEEDS_SOFFICE
+async def test_docx_to_pdf_custom_output_uri(
+    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+) -> None:
+    await docx_create("local://in.docx", title="Hello")
+
+    result = await docx_to_pdf(
+        "local://in.docx", output_uri="local://out/renamed.pdf"
+    )
+
+    assert result["file_uri"] == "local://out/renamed.pdf"
+    assert (tmp_path / yacine.user_id / "out" / "renamed.pdf").exists()
