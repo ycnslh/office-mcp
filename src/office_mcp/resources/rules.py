@@ -28,3 +28,9 @@ def docx_rules() -> str:
 def xlsx_rules() -> str:
     """Formatting rules and conventions for Excel spreadsheets."""
     return _load("xlsx_rules.md")
+
+
+@mcp.resource("office://rules/pptx", mime_type="text/markdown")
+def pptx_rules() -> str:
+    """Formatting rules and conventions for PowerPoint decks."""
+    return _load("pptx_rules.md")
