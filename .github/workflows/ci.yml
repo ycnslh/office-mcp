@@ -48,6 +48,19 @@ jobs:
               && poetry run ruff check . \
               && poetry run pytest -v --tb=short -p no:cacheprovider"
 
+  # ─── Image build verification (every PR + push) ───────────────────────────
+  # Catches Dockerfile regressions before they hit main. No registry push —
+  # image stays local on the runner per PoC choice.
+  build-image:
+    name: Build image
+    runs-on: self-hosted
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t office-mcp:ci-${{ github.sha }} .
+
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
   # PoC mode: everything is hardcoded except MINIMAX_API_KEY.
   # Repo is private, so the bearer token / LibreChat secrets being in plain
@@ -56,7 +69,7 @@ jobs:
     name: Deploy
     runs-on: self-hosted
     environment: production
-    needs: [test]
+    needs: [test, build-image]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
