@@ -46,9 +46,9 @@ async def _ok(_: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-def _app(capacity: int, route_path: str = "/mcp/whatever") -> Starlette:
+def _app(capacity: int) -> Starlette:
     return Starlette(
-        routes=[Route(route_path, _ok), Route("/health", _ok)],
+        routes=[Route("/mcp/x", _ok), Route("/health", _ok)],
         middleware=[Middleware(RateLimitMiddleware, requests_per_minute=capacity)],
     )
 
