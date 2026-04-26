@@ -64,3 +64,12 @@ class StorageBackend(ABC):
     @abstractmethod
     async def delete(self, uri: str, *, user_ctx: UserContext) -> None:
         """Delete the file at ``uri``. Raises if it does not exist."""
+
+    async def health_check(self) -> str:
+        """Return ``"ok"`` if the backend is reachable, raise otherwise.
+
+        The default implementation is a no-op; backends with non-trivial
+        IO (filesystem, network) should override and probe the underlying
+        store. The result feeds the ``/health`` endpoint.
+        """
+        return "ok"

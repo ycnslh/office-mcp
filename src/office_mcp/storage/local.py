@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -171,3 +172,10 @@ class LocalBackend(StorageBackend):
         if not target.is_file():
             raise StorageNotFoundError(uri)
         target.unlink()
+
+    async def health_check(self) -> str:
+        if not self._root.is_dir():
+            raise RuntimeError(f"root {self._root} is not a directory")
+        if not os.access(self._root, os.W_OK):
+            raise RuntimeError(f"root {self._root} is not writable")
+        return "ok"

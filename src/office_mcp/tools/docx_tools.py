@@ -16,7 +16,8 @@ from typing import Any
 
 from office_mcp.context import require_current_user
 from office_mcp.engines import docx_engine
-from office_mcp.runtime import build_download_url, get_registry, mcp
+from office_mcp.instrumentation import register_tool
+from office_mcp.runtime import build_download_url, get_registry
 from office_mcp.utils import libreoffice
 
 
@@ -180,9 +181,9 @@ def _swap_extension(uri: str, new_ext: str) -> str:
     return uri + new_ext
 
 
-# Register with FastMCP. Done imperatively so the module-level names above
-# remain plain async functions (the @mcp.tool decorator wraps them in a
-# FunctionTool that is not directly callable).
+# Register with FastMCP through the instrumentation wrapper. Done imperatively
+# so the module-level names above remain plain async functions (the @mcp.tool
+# decorator wraps them in a FunctionTool that is not directly callable).
 for _fn in (
     docx_create,
     docx_read,
@@ -190,4 +191,4 @@ for _fn in (
     docx_insert_table,
     docx_to_pdf,
 ):
-    mcp.tool(_fn)
+    register_tool(_fn)

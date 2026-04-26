@@ -20,15 +20,23 @@ registrations happen before the FastMCP HTTP app is materialised.
 
 from __future__ import annotations
 
+import time
+import uuid
+from collections import defaultdict
+from dataclasses import dataclass, field
+
+import structlog
 import uvicorn
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from office_mcp import __version__
+from office_mcp import __version__, metrics
 from office_mcp.config import Settings
-from office_mcp.context import UserContext, bind_user
-from office_mcp.runtime import mcp, set_registry, set_settings
+from office_mcp.context import UserContext, bind_user, current_user
+from office_mcp.instrumentation import setup_logging
+from office_mcp.runtime import get_registry, mcp, set_registry, set_settings
 from office_mcp.storage import LocalBackend, StorageRegistry
 from office_mcp.utils import signing
 from office_mcp.utils.errors import StorageNotFoundError
@@ -38,24 +46,47 @@ from office_mcp.utils.errors import StorageNotFoundError
 
 @mcp.custom_route("/health", methods=["GET"])
 async def _health(_: Request) -> JSONResponse:
+    backends: dict[str, str] = {}
+    overall = "ok"
+    try:
+        registry = get_registry()
+    except RuntimeError:
+        backends = {}
+    else:
+        for scheme, backend in registry.items():
+            try:
+                backends[scheme] = await backend.health_check()
+            except Exception as exc:  # noqa: BLE001 — surface any failure
+                backends[scheme] = f"error: {exc}"
+                overall = "degraded"
     return JSONResponse(
         {
-            "status": "ok",
+            "status": overall,
             "version": __version__,
-            "phase": "9-librechat-integration",
+            "phase": "10-hardening",
             "mcp_ready": True,
+            "backends": backends,
         }
+    )
+
+
+@mcp.custom_route("/metrics", methods=["GET"])
+async def _prometheus_metrics(_: Request) -> Response:
+    return Response(
+        content=generate_latest(metrics.REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
     )
 
 
 @mcp.custom_route("/files/{token}", methods=["GET"])
 async def _download(request: Request) -> Response:
     """Serve a file referenced by a signed, user-scoped download token."""
-    from office_mcp.runtime import get_registry, get_settings
+    from office_mcp.runtime import get_settings
 
     token = request.path_params["token"]
     settings = get_settings()
     if not settings.signing_secret:
+        metrics.downloads_total.labels(status="disabled").inc()
         return JSONResponse(
             {"error": "downloads disabled (OFFICE_MCP_SIGNING_SECRET unset)"},
             status_code=404,
@@ -64,6 +95,7 @@ async def _download(request: Request) -> Response:
     try:
         claims = signing.verify(token, secret=settings.signing_secret)
     except signing.InvalidTokenError as exc:
+        metrics.downloads_total.labels(status="forbidden").inc()
         return JSONResponse({"error": f"invalid token: {exc}"}, status_code=403)
 
     user_ctx = UserContext(user_id=claims.user_id)
@@ -72,9 +104,11 @@ async def _download(request: Request) -> Response:
         data = await backend.read(claims.uri, user_ctx=user_ctx)
         meta = await backend.stat(claims.uri, user_ctx=user_ctx)
     except StorageNotFoundError:
+        metrics.downloads_total.labels(status="not_found").inc()
         return JSONResponse({"error": "not found"}, status_code=404)
 
     filename = claims.uri.rsplit("/", 1)[-1] or "download"
+    metrics.downloads_total.labels(status="ok").inc()
     return Response(
         content=data,
         media_type=meta.mime_type or "application/octet-stream",
@@ -106,9 +140,13 @@ class BearerAuthMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path", "")
-        # /health: Docker probes don't send the bearer.
+        # /health, /metrics: probes / scrapers don't send the bearer.
         # /files/*: its own per-request auth lives in the HMAC-signed token.
-        if path == "/health" or path.startswith("/files/"):
+        if (
+            path == "/health"
+            or path == "/metrics"
+            or path.startswith("/files/")
+        ):
             await self.app(scope, receive, send)
             return
         auth = _header(scope, b"authorization")
@@ -119,6 +157,120 @@ class BearerAuthMiddleware:
             await _reject(send, 401, b'{"error":"unauthorized"}')
             return
         await self.app(scope, receive, send)
+
+
+@dataclass
+class _TokenBucket:
+    """Refilling token bucket — capacity tokens, ``capacity`` per minute."""
+
+    capacity: int
+    tokens: float = field(init=False)
+    last_refill: float = field(default_factory=time.monotonic)
+
+    def __post_init__(self) -> None:
+        self.tokens = float(self.capacity)
+
+    def take(self) -> bool:
+        now = time.monotonic()
+        rate_per_second = self.capacity / 60.0
+        self.tokens = min(
+            float(self.capacity),
+            self.tokens + (now - self.last_refill) * rate_per_second,
+        )
+        self.last_refill = now
+        if self.tokens >= 1:
+            self.tokens -= 1
+            return True
+        return False
+
+    def retry_after_seconds(self) -> int:
+        if self.tokens >= 1:
+            return 0
+        rate_per_second = self.capacity / 60.0
+        return max(1, int((1 - self.tokens) / rate_per_second) + 1)
+
+
+class RateLimitMiddleware:
+    """Token-bucket rate limiter scoped per user (LibreChat user_id).
+
+    Only `/mcp*` paths are rate-limited; `/health`, `/metrics` and
+    `/files/{token}` are excluded so probes, scrapers and downloads
+    don't burn the user's budget.
+    """
+
+    def __init__(self, app: ASGIApp, requests_per_minute: int) -> None:
+        self.app = app
+        self._capacity = requests_per_minute
+        self._buckets: dict[str, _TokenBucket] = defaultdict(
+            lambda: _TokenBucket(capacity=requests_per_minute)
+        )
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or self._capacity <= 0:
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if not path.startswith("/mcp"):
+            await self.app(scope, receive, send)
+            return
+        user = current_user()
+        user_key = user.user_id if user else "anonymous"
+        bucket = self._buckets[user_key]
+        if not bucket.take():
+            metrics.rate_limited_total.labels(user_id=user_key).inc()
+            retry_after = bucket.retry_after_seconds()
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 429,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"retry-after", str(retry_after).encode()),
+                    ],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": (
+                        f'{{"error":"rate limit exceeded","retry_after":{retry_after}}}'
+                    ).encode(),
+                }
+            )
+            return
+        await self.app(scope, receive, send)
+
+
+class RequestIdMiddleware:
+    """Bind a per-request correlation ID into structlog's contextvars.
+
+    Honours an inbound ``X-Request-Id`` header, otherwise generates a
+    UUID4. The ID is appended to every log line emitted while the
+    request is in flight and echoed back in the response header so
+    callers can grep across logs.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request_id = _header(scope, b"x-request-id") or uuid.uuid4().hex
+        token = structlog.contextvars.bind_contextvars(request_id=request_id)
+
+        async def _send_with_header(message: dict[str, object]) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))  # type: ignore[arg-type]
+                headers.append((b"x-request-id", request_id.encode()))
+                message = {**message, "headers": headers}
+            await send(message)  # type: ignore[arg-type]
+
+        try:
+            await self.app(scope, receive, _send_with_header)
+        finally:
+            structlog.contextvars.unbind_contextvars(*token)
 
 
 class UserContextMiddleware:
@@ -184,6 +336,7 @@ def _bootstrap(settings: Settings) -> None:
     Idempotent: safe to call from both :func:`run` and :func:`build_app`.
     """
     global _BOOTSTRAPPED
+    setup_logging(settings.log_level)
     set_settings(settings)
     registry = StorageRegistry()
     registry.register(LocalBackend(root=settings.local_root))
@@ -210,8 +363,12 @@ def _bootstrap(settings: Settings) -> None:
 def build_app(settings: Settings) -> ASGIApp:
     _bootstrap(settings)
     app = mcp.http_app(path="/mcp")
+    # add_middleware prepends — last call wraps everything, so the
+    # request flow is: RequestId → BearerAuth → UserContext → RateLimit → MCP.
+    app.add_middleware(RateLimitMiddleware, requests_per_minute=settings.rate_limit_per_min)
     app.add_middleware(UserContextMiddleware, fallback_user_id=settings.default_user_id)
     app.add_middleware(BearerAuthMiddleware, expected_token=settings.token)
+    app.add_middleware(RequestIdMiddleware)
     return app
 
 

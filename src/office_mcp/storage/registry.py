@@ -38,3 +38,7 @@ class StorageRegistry:
         if not self._backends:
             return "(no backend registered)"
         return f"{next(iter(sorted(self._backends)))}://your/path/here"
+
+    def items(self) -> list[tuple[str, StorageBackend]]:
+        """Iterate registered ``(scheme, backend)`` pairs."""
+        return sorted(self._backends.items())

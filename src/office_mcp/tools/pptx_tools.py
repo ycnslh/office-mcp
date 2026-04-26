@@ -7,7 +7,8 @@ from typing import Any
 
 from office_mcp.context import require_current_user
 from office_mcp.engines import pptx_engine
-from office_mcp.runtime import build_download_url, get_registry, mcp
+from office_mcp.instrumentation import register_tool
+from office_mcp.runtime import build_download_url, get_registry
 
 
 async def pptx_create(
@@ -108,4 +109,4 @@ async def pptx_read(file_uri: str) -> dict[str, Any]:
 
 # Register with FastMCP imperatively — see tools/docx_tools.py for the why.
 for _fn in (pptx_create, pptx_add_slide, pptx_read):
-    mcp.tool(_fn)
+    register_tool(_fn)

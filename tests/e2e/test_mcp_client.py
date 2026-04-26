@@ -108,3 +108,9 @@ async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
         assert "office://rules/docx" in resource_uris
         assert "office://rules/xlsx" in resource_uris
         assert "office://rules/pptx" in resource_uris
+
+    # /metrics must be reachable on the same uvicorn without a bearer.
+    async with httpx.AsyncClient() as client:
+        metrics_resp = await client.get(f"{running_server}/metrics", timeout=5)
+    assert metrics_resp.status_code == 200
+    assert "office_mcp_tool_calls_total" in metrics_resp.text

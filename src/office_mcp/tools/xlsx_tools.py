@@ -12,7 +12,8 @@ from typing import Any
 
 from office_mcp.context import require_current_user
 from office_mcp.engines import xlsx_engine
-from office_mcp.runtime import build_download_url, get_registry, mcp
+from office_mcp.instrumentation import register_tool
+from office_mcp.runtime import build_download_url, get_registry
 
 
 async def xlsx_create(
@@ -156,4 +157,4 @@ async def xlsx_apply_formula(
 
 # Register with FastMCP imperatively — see tools/docx_tools.py for the why.
 for _fn in (xlsx_create, xlsx_read_range, xlsx_write_range, xlsx_apply_formula):
-    mcp.tool(_fn)
+    register_tool(_fn)

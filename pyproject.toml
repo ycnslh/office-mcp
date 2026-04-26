@@ -21,6 +21,7 @@ anyio = "^4.6.0"
 httpx = "^0.28.1"
 starlette = "^0.46.0"
 uvicorn = { version = "^0.35.0", extras = ["standard"] }
+prometheus-client = "^0.21.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.0"
