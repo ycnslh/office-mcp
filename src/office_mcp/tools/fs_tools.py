@@ -19,9 +19,20 @@ from office_mcp.runtime import build_download_url, get_registry
 async def fs_list(uri_prefix: str) -> dict[str, Any]:
     """List files under a URI prefix.
 
+    Pick the scheme from the user's intent — never default silently:
+
+    * ``od://`` — the user's Microsoft OneDrive. Use whenever they say
+      "OneDrive", "my Microsoft files", "cloud", "Office 365". The bare
+      ``od://`` lists the drive root; ``od://Documents/`` lists a folder.
+      First call returns ``{"auth_required": true, "login_url": ...}`` —
+      surface the URL, wait for the user, then retry with the same args.
+    * ``local://`` — the user's per-account scratch space on the server.
+      Use only for drafts the user hasn't asked to put in the cloud.
+      ``local://`` lists the whole scope; ``local://reports/`` a folder.
+
     Args:
-        uri_prefix: A directory-like URI such as ``local://reports/`` or the
-            bare scheme ``local://`` to list the whole user scope.
+        uri_prefix: A directory-like URI. Examples: ``od://``,
+            ``od://Documents/``, ``local://``, ``local://reports/``.
     """
     user = require_current_user()
     backend = get_registry().get(uri_prefix)
@@ -44,7 +55,13 @@ async def fs_list(uri_prefix: str) -> dict[str, Any]:
 
 
 async def fs_stat(file_uri: str) -> dict[str, Any]:
-    """Return metadata (size, mtime, etag, mime) for a single file."""
+    """Return metadata (size, mtime, etag, mime) for a single file.
+
+    ``file_uri`` carries the storage scheme — ``od://Documents/q3.docx``
+    for OneDrive, ``local://reports/q3.docx`` for the server scratch
+    space. ``od://`` may return an ``auth_required`` payload on first
+    call; surface the login URL and retry.
+    """
     user = require_current_user()
     backend = get_registry().get(file_uri)
     meta = await backend.stat(file_uri, user_ctx=user)
@@ -61,10 +78,10 @@ async def fs_stat(file_uri: str) -> dict[str, Any]:
 async def fs_copy(source_uri: str, destination_uri: str) -> dict[str, Any]:
     """Copy a file between URIs.
 
-    Works across storage backends: the source backend provides the bytes
-    and the destination backend writes them. Same-scheme copies are
-    handled identically — there is no fast path, but correctness comes
-    first.
+    Works across storage backends: ``local://`` ↔ ``od://`` is the
+    typical case (publish a draft from local scratch to the user's
+    OneDrive, or pull a OneDrive file down to local for editing). Same-
+    scheme copies are handled identically — no fast path, but correct.
     """
     user = require_current_user()
     source_backend = get_registry().get(source_uri)
