@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,10 +48,40 @@ class Settings(BaseSettings):
     """Lifetime of signed download tokens. Short values reduce replay risk;
     long values tolerate slow readers. Default: 15 min."""
 
+    public_base_url: str | None = None
+    """Externally-reachable HTTPS base URL of this server, used to build
+    OAuth ``redirect_uri`` values registered with Azure AD. Example:
+    ``https://office-mcp.h.reho.dev``. Required for the OAuth flow; when
+    unset the ``/auth/*`` endpoints return 503."""
+
+    # ── Azure AD / Microsoft Graph (delegated OAuth → user OneDrive) ─────
+    # Read from un-prefixed env vars so the same names work in the deploy
+    # workflow (which sources them from GitHub Secrets) and in any local
+    # `.env` produced by an Azure CLI helper.
+
+    azure_tenant_id: str | None = Field(default=None, validation_alias="AZURE_TENANT_ID")
+    azure_client_id: str | None = Field(default=None, validation_alias="AZURE_CLIENT_ID")
+    azure_client_secret: str | None = Field(
+        default=None, validation_alias="AZURE_CLIENT_SECRET"
+    )
+
+    @property
+    def oauth_configured(self) -> bool:
+        """True iff every Azure AD setting needed to drive the OAuth flow is set."""
+        return bool(
+            self.azure_tenant_id
+            and self.azure_client_id
+            and self.azure_client_secret
+            and self.public_base_url
+        )
+
     model_config = SettingsConfigDict(
         env_prefix="OFFICE_MCP_",
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Lets tests instantiate `Settings(azure_tenant_id="...")` even
+        # though the env-side alias is the un-prefixed `AZURE_TENANT_ID`.
+        populate_by_name=True,
     )

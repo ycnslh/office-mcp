@@ -33,10 +33,18 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from office_mcp import __version__, metrics
+from office_mcp.auth import OAuthClient, OAuthConfig, TokenStore
 from office_mcp.config import Settings
 from office_mcp.context import UserContext, bind_user, current_user
 from office_mcp.instrumentation import setup_logging
-from office_mcp.runtime import get_registry, mcp, set_registry, set_settings
+from office_mcp.runtime import (
+    get_registry,
+    mcp,
+    set_oauth_client,
+    set_registry,
+    set_settings,
+    set_token_store,
+)
 from office_mcp.storage import LocalBackend, StorageRegistry
 from office_mcp.utils import signing
 from office_mcp.utils.errors import StorageNotFoundError
@@ -124,11 +132,27 @@ async def _download(request: Request) -> Response:
 # transport are not buffered into memory.
 
 
+#: Routes served without the bearer token. Exact-match (not prefix) so
+#: a future router upgrade or an oddly-encoded path can't slip past
+#: gating into ``/mcp``. ``/files/`` keeps the prefix check below
+#: because it carries a path parameter.
+_PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/metrics",
+        "/auth/login",
+        "/auth/callback",
+        "/auth/status",
+    }
+)
+
+
 class BearerAuthMiddleware:
     """Reject requests missing a valid ``Authorization: Bearer <token>``.
 
-    No-ops when ``expected_token`` is ``None``. Always lets ``/health``
-    through so Docker healthchecks and uptime probes don't need the token.
+    No-ops when ``expected_token`` is ``None``. Lets a closed set of
+    public paths through (probes, signed downloads, OAuth flow) — see
+    :data:`_PUBLIC_PATHS` and the ``/files/`` prefix below.
     """
 
     def __init__(self, app: ASGIApp, expected_token: str | None) -> None:
@@ -141,12 +165,10 @@ class BearerAuthMiddleware:
             return
         path = scope.get("path", "")
         # /health, /metrics: probes / scrapers don't send the bearer.
+        # /auth/*: drives the user-facing OAuth flow before any bearer
+        #          token is in scope; gating is via the OAuth `state`.
         # /files/*: its own per-request auth lives in the HMAC-signed token.
-        if (
-            path == "/health"
-            or path == "/metrics"
-            or path.startswith("/files/")
-        ):
+        if path in _PUBLIC_PATHS or path.startswith("/files/"):
             await self.app(scope, receive, send)
             return
         auth = _header(scope, b"authorization")
@@ -342,10 +364,15 @@ def _bootstrap(settings: Settings) -> None:
     registry.register(LocalBackend(root=settings.local_root))
     set_registry(registry)
 
+    set_token_store(TokenStore())
+    set_oauth_client(_build_oauth_client(settings))
+
     if _BOOTSTRAPPED:
         return
-    # Importing these modules triggers the @mcp.tool / @mcp.resource
-    # decorators that register the surface with the FastMCP instance.
+    # Importing these modules triggers the @mcp.tool / @mcp.resource /
+    # @mcp.custom_route decorators that register the surface with the
+    # FastMCP instance.
+    from office_mcp.auth import routes as _auth_routes  # noqa: F401
     from office_mcp.resources import rules  # noqa: F401
     from office_mcp.tools import (  # noqa: F401
         docx_tools,
@@ -355,6 +382,28 @@ def _bootstrap(settings: Settings) -> None:
     )
 
     _BOOTSTRAPPED = True
+
+
+def _build_oauth_client(settings: Settings) -> OAuthClient | None:
+    """Instantiate the Azure AD client when fully configured, else ``None``.
+
+    Returning ``None`` makes ``/auth/*`` answer 503 instead of crashing
+    at startup — useful in dev where Azure creds may be absent.
+    """
+    tenant_id = settings.azure_tenant_id
+    client_id = settings.azure_client_id
+    client_secret = settings.azure_client_secret
+    base_url = settings.public_base_url
+    if not (tenant_id and client_id and client_secret and base_url):
+        return None
+    return OAuthClient(
+        OAuthConfig(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=f"{base_url.rstrip('/')}/auth/callback",
+        )
+    )
 
 
 # ── App factory ────────────────────────────────────────────────────────
