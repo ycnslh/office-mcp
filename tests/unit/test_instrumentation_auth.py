@@ -67,7 +67,32 @@ async def test_wrapper_converts_auth_required_to_login_url_response(
 
     assert result["auth_required"] is True
     assert result["login_url"].startswith("https://login.microsoftonline.com/")
-    assert "Cliquez" in result["summary"]
+    assert "Connectez-vous" in result["summary"]
+
+
+@pytest.mark.asyncio
+async def test_wrapper_falls_back_when_pending_store_full(
+    monkeypatch: pytest.MonkeyPatch,
+    wired_runtime: None,
+) -> None:
+    """PendingStoreFull must produce an auth_required dict, not a raw 500."""
+    from office_mcp.auth.store import TokenStore
+    from office_mcp.runtime import get_token_store
+
+    # Force the cap to 0 so any remember_pending raises immediately.
+    monkeypatch.setattr(TokenStore, "MAX_PENDING", 0)
+    # Re-register the same store under the patched class state.
+    get_token_store()  # ensure it exists; cap is class-level so applies live
+
+    async def needs_auth() -> dict[str, str]:
+        raise AuthRequiredError("Graph 401")
+
+    with bind_mcp_session_id("session-busy"):
+        result = await instrumented(needs_auth)()
+
+    assert result["auth_required"] is True
+    assert "login_url" not in result
+    assert "Réessayez" in result["summary"]
 
 
 @pytest.mark.asyncio

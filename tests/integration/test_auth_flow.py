@@ -296,6 +296,11 @@ def test_callback_links_session_when_started_by_a_tool(
     }
 
     # Tool side: mint a state bound to "session-S1".
+    # NOTE: in production a tool runs inside the uvicorn worker, but
+    # here we mutate the same in-process TokenStore directly. The test
+    # thread and the server thread share the singleton wired by
+    # build_app() — that's the only reason this works without a real
+    # tool call routed through /mcp.
     state, _ = start_oauth_flow(mcp_session_id="session-S1")
 
     # Microsoft side: redirect back to /auth/callback with that state.

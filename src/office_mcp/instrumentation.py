@@ -87,9 +87,10 @@ def instrumented(fn: F) -> F:
                 duration_ms=round(duration * 1000, 2),
                 detail=str(exc)[:200],
             )
-            # Local import: ``flow`` pulls runtime helpers, which import
-            # the auth package — keeping this lazy avoids the cycle.
+            # Local imports: ``flow`` pulls runtime helpers, which import
+            # the auth package — keeping these lazy avoids the cycle.
             from office_mcp.auth.flow import auth_required_response
+            from office_mcp.auth.store import PendingStoreFull
 
             try:
                 return auth_required_response(current_mcp_session_id())
@@ -101,6 +102,17 @@ def instrumented(fn: F) -> F:
                     "summary": (
                         "Cloud backend access requires Microsoft auth, "
                         "but Azure AD is not configured on this server."
+                    ),
+                }
+            except PendingStoreFull:
+                # Pending-claim store at capacity — same shape as the
+                # other auth_required branches so the LLM doesn't have
+                # to learn a third response variant.
+                return {
+                    "auth_required": True,
+                    "summary": (
+                        "Trop de tentatives d'authentification simultanées "
+                        "sur ce serveur. Réessayez dans quelques instants."
                     ),
                 }
         except Exception as exc:

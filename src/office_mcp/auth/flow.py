@@ -95,9 +95,11 @@ def auth_required_response(mcp_session_id: str | None) -> dict[str, Any]:
     return {
         "auth_required": True,
         "login_url": login_url,
+        # Render as a Markdown link on its own line so the LLM can't
+        # paraphrase it into a sentence and silently truncate the URL.
         "summary": (
-            "Authentification Microsoft requise pour accéder à OneDrive. "
-            f"Cliquez ici pour vous connecter : {login_url} — "
-            "puis demandez-moi à nouveau la même opération."
+            "Authentification Microsoft requise pour accéder à OneDrive.\n\n"
+            f"[Connectez-vous ici]({login_url})\n\n"
+            "Puis demandez-moi à nouveau la même opération."
         ),
     }

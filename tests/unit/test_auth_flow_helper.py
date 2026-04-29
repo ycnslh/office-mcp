@@ -96,7 +96,6 @@ def test_auth_required_response_shape(
 
     assert response["auth_required"] is True
     assert response["login_url"].startswith("https://login.microsoftonline.com/")
-    assert "Cliquez" in response["summary"]
-    # The login URL is embedded in the summary so the LLM has no excuse
-    # not to pass it to the user verbatim.
-    assert response["login_url"] in response["summary"]
+    # Markdown-link rendering on its own line so the LLM can't truncate
+    # the URL by paraphrasing it inline.
+    assert f"[Connectez-vous ici]({response['login_url']})" in response["summary"]

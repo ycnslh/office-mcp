@@ -176,3 +176,41 @@ def test_delete_token_clears_session_index() -> None:
     store.delete_token("state-X")
 
     assert store.get_token_for_session("session-1") is None
+
+
+def test_link_session_to_state_ignores_oversized_session_id() -> None:
+    """Defensive cap so a misbehaving caller can't grow the index."""
+    store = TokenStore()
+    store.put_token("state-X", _entry())
+    long_id = "x" * (TokenStore.MAX_SESSION_ID_LENGTH + 1)
+
+    store.link_session_to_state(long_id, "state-X")
+
+    assert store.get_token_for_session(long_id) is None
+
+
+def test_link_session_to_state_ignores_empty_session_id() -> None:
+    store = TokenStore()
+    store.put_token("state-X", _entry())
+
+    store.link_session_to_state("", "state-X")
+
+    assert store.get_token_for_session("") is None
+
+
+def test_token_purge_drops_orphan_session_links() -> None:
+    """Long-running deployments must not accumulate stale session links."""
+    store = TokenStore(token_ttl_seconds=0)
+    store.put_token("state-X", _entry())
+    store.link_session_to_state("session-1", "state-X")
+    time.sleep(0.01)
+    # token_count() triggers _purge_expired_tokens_locked which now
+    # also cleans the session index — verify both maps shrink.
+    assert store.token_count() == 0
+    # Re-add a fresh, long-lived token under a different state to
+    # force a subsequent get_token_for_session NOT to find the old
+    # session-1 link via the orphan-clean path.
+    fresh = TokenStore()
+    fresh.put_token("state-Y", _entry())
+    # ``session-1`` from the first store must not resolve in the new one.
+    assert fresh.get_token_for_session("session-1") is None

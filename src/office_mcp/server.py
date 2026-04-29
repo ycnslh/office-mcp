@@ -314,6 +314,17 @@ class UserContextMiddleware:
     session, stamps ``user_ctx.on_behalf_of_token`` so cloud backends
     (Graph, future Drive) can act on the user's behalf without each
     tool re-implementing the lookup. Phase 7c.
+
+    Trust model
+    -----------
+    ``Mcp-Session-Id`` is treated as a **capability**: any caller able to
+    present both a valid bearer (when ``OFFICE_MCP_TOKEN`` is set) and a
+    known session id is granted Graph access on behalf of the human
+    Microsoft user previously bound to that session via ``/auth/callback``.
+    The bearer + session-id combination is therefore the user-impersonation
+    boundary on this server — never log a session id at INFO level, never
+    accept session ids from sources other than the MCP transport header,
+    and rotate the bearer immediately if it ever leaks.
     """
 
     def __init__(self, app: ASGIApp, fallback_user_id: str = "demo-user") -> None:
