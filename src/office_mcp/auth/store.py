@@ -200,6 +200,26 @@ class TokenStore:
                 return None
             return entry
 
+    def get_state_for_session(self, mcp_session_id: str) -> str | None:
+        """Return the OAuth ``state`` linked to ``mcp_session_id``, or ``None``.
+
+        Used by :func:`office_mcp.runtime.build_download_url` to embed
+        a token-lookup key inside the signed download URL — the route
+        that serves the file later resolves the actual access token
+        from this state via :meth:`get_token`.
+        """
+        with self._lock:
+            self._purge_expired_tokens_locked()
+            state = self._session_to_state.get(mcp_session_id)
+            if state is None:
+                return None
+            # Only return the state if the underlying token actually
+            # exists; otherwise the URL we'd build is dead-on-arrival.
+            if state not in self._tokens:
+                self._session_to_state.pop(mcp_session_id, None)
+                return None
+            return state
+
     def token_count(self) -> int:
         with self._lock:
             self._purge_expired_tokens_locked()

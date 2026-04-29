@@ -33,6 +33,12 @@ class TokenClaims:
     user_id: str
     uri: str
     expires_at: int
+    #: Optional OAuth ``state`` (token-store key) that the download
+    #: route uses to resolve a Microsoft Graph access token at request
+    #: time. Absent on URLs minted for ``local://`` (no token needed)
+    #: and on URLs minted before this field landed — the verify path
+    #: tolerates both shapes.
+    state: str | None = None
 
 
 def sign(
@@ -41,15 +47,25 @@ def sign(
     uri: str,
     secret: str,
     ttl_seconds: int = 900,
+    state: str | None = None,
 ) -> str:
-    """Return a URL-safe opaque token authorising a download."""
+    """Return a URL-safe opaque token authorising a download.
+
+    ``state`` is optional and only meaningful for cloud-backed URIs
+    (e.g. ``od://``) where the download endpoint needs a per-user
+    OAuth token to fetch bytes. Embedding it lets ``/files/{token}``
+    look up the right access token without keeping any extra
+    server-side mapping keyed by user.
+    """
     if not secret:
         raise ValueError("signing secret must not be empty")
-    claims = {
+    claims: dict[str, str | int] = {
         "uid": user_id,
         "uri": uri,
         "exp": int(time.time()) + ttl_seconds,
     }
+    if state is not None:
+        claims["sta"] = state
     payload = json.dumps(claims, separators=(",", ":"), sort_keys=True).encode()
     mac = hmac.new(secret.encode(), payload, hashlib.sha256).digest()
     return (
@@ -88,10 +104,13 @@ def verify(token: str, *, secret: str) -> TokenClaims:
     except (KeyError, TypeError, ValueError) as exc:
         raise InvalidTokenError("missing/invalid claims") from exc
 
+    raw_state = claims.get("sta")
+    state = str(raw_state) if raw_state is not None else None
+
     if exp < time.time():
         raise InvalidTokenError("expired")
 
-    return TokenClaims(user_id=uid, uri=uri, expires_at=exp)
+    return TokenClaims(user_id=uid, uri=uri, expires_at=exp, state=state)
 
 
 def _b64encode(data: bytes) -> str:

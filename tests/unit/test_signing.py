@@ -18,6 +18,33 @@ def test_sign_then_verify_roundtrip() -> None:
     assert claims.user_id == "yacine"
     assert claims.uri == "local://reports/q3.docx"
     assert claims.expires_at > int(time.time())
+    # Old shape: no state field — claims should reflect that.
+    assert claims.state is None
+
+
+def test_sign_then_verify_carries_state_when_supplied() -> None:
+    """The download route uses ``state`` to look up the user's OAuth
+    token at request time — pin the round-trip so ``od://`` URLs work."""
+    token = signing.sign(
+        user_id="yacine",
+        uri="od://Decks/pitch.pptx",
+        secret="k3y",
+        state="opaque-state-abc",
+    )
+    claims = signing.verify(token, secret="k3y")
+
+    assert claims.state == "opaque-state-abc"
+    assert claims.uri == "od://Decks/pitch.pptx"
+
+
+def test_old_format_token_without_state_still_verifies() -> None:
+    """Backward compatibility: tokens minted before the ``state`` field
+    landed are still accepted; the route then treats them as
+    ``state=None`` (works for ``local://``, fails for ``od://``)."""
+    token = signing.sign(user_id="bob", uri="local://x.docx", secret="k3y")
+    claims = signing.verify(token, secret="k3y")
+
+    assert claims.state is None
 
 
 def test_verify_rejects_wrong_secret() -> None:
