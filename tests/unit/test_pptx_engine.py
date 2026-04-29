@@ -75,6 +75,23 @@ def test_add_slide_two_content_layout_fills_both_columns() -> None:
     assert right == ["Fragile", "Locks us in"]
 
 
+def test_add_slide_title_layout_with_subtitle_fills_both() -> None:
+    """The ``title`` layout via ``add_slide`` accepts a subtitle so the
+    ``pptx_add_title_slide`` tool can reuse the engine instead of having
+    to re-implement the title-slide creation that lives in
+    ``pptx_engine.create``."""
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(
+        data, layout="title", title="Cover", subtitle="Q3 review"
+    )
+
+    prs = Presentation(BytesIO(data))
+    cover = prs.slides[1]
+    assert cover.shapes.title.text == "Cover"
+    # Title-slide subtitle is at placeholder idx 1.
+    assert cover.placeholders[1].text == "Q3 review"
+
+
 def test_add_slide_section_layout_sets_title_only() -> None:
     data = pptx_engine.create(title="Deck")
     data = pptx_engine.add_slide(data, layout="section", title="Part II — Details")
