@@ -53,16 +53,36 @@ async def pptx_add_slide(
     content_right: list[str] | None = None,
     theme: str = "corporate",
 ) -> dict[str, Any]:
-    """Append a slide to an existing deck.
+    """Append a NEW slide to the end of an existing deck.
+
+    To change a slide that already exists, use ``pptx_update_slide`` —
+    this tool only appends.
+
+    Layouts (default is ``content``, which is what you want 90% of the time):
+
+    * ``content`` — title + bulleted body. Pass ``title="My headline"``
+      and ``content=["First point", "Second point", ...]``. **This is the
+      default body-slide layout; pick this whenever the user asks for a
+      regular slide with text.**
+    * ``two-content`` — title + two bullet columns. Pass ``content``
+      (left column) and ``content_right`` (right column).
+    * ``section`` — section divider. Title only, no bullets. Use to
+      break the deck into parts.
+    * ``title`` — title-slide layout (deck cover). Title + subtitle, no
+      bullets. **Do not use this for body slides** — bullets passed via
+      ``content`` are silently dropped on this layout.
+    * ``blank`` — empty slide; title only, no body.
 
     Args:
-        file_uri: URI of the deck to mutate.
+        file_uri: URI of the deck to mutate (e.g. ``od://decks/q3.pptx``).
         title: Slide headline.
-        layout: ``title`` / ``content`` / ``section`` / ``two-content`` / ``blank``.
-        content: Bullet lines for the main placeholder (``content`` and
-            ``two-content`` layouts).
+        layout: One of ``content`` (default), ``two-content``, ``section``,
+            ``title``, ``blank``. See list above for when to pick which.
+        content: Bullet lines for the main placeholder. Honoured for
+            ``content`` and ``two-content`` layouts; ignored for the rest.
         content_right: Bullet lines for the second column (``two-content``).
-        theme: Colors / fonts; keep consistent with the rest of the deck.
+        theme: ``corporate`` / ``minimal`` / ``cyberpunk``. Keep
+            consistent with the rest of the deck.
     """
     user = require_current_user()
     backend = get_registry().get(file_uri)
@@ -90,6 +110,69 @@ async def pptx_add_slide(
     }
 
 
+async def pptx_update_slide(
+    file_uri: str,
+    slide_index: int,
+    title: str | None = None,
+    content: list[str] | None = None,
+    content_right: list[str] | None = None,
+    theme: str = "corporate",
+) -> dict[str, Any]:
+    """Mutate an existing slide in place — use this to fill in body
+    text on a slide that was created with just a title.
+
+    All fields are optional and only acted on when supplied. Pass
+    ``content`` to (re)populate the main bullet column; pass
+    ``content_right`` for the second column on a ``two-content`` slide;
+    pass ``title`` to rewrite the headline. Bullet replacements clear
+    the existing paragraphs first.
+
+    Args:
+        file_uri: URI of the deck to mutate.
+        slide_index: Zero-based index. Slide 0 is the first slide
+            (typically the cover added by ``pptx_create``); call
+            ``pptx_read`` first if you need the count.
+        title: New slide title (leave ``None`` to keep the current one).
+        content: Bullet lines for the main placeholder. Replaces — does
+            not append to — the existing bullets.
+        content_right: Bullet lines for the second column.
+        theme: Colors / fonts to apply to the rewritten text. Keep
+            consistent with the rest of the deck.
+    """
+    user = require_current_user()
+    backend = get_registry().get(file_uri)
+    original = await backend.read(file_uri, user_ctx=user)
+    updated = await asyncio.to_thread(
+        pptx_engine.update_slide,
+        original,
+        index=slide_index,
+        title=title,
+        content=content,
+        content_right=content_right,
+        theme=theme,
+    )
+    meta = await backend.write(file_uri, updated, user_ctx=user)
+    fields_changed = [
+        name
+        for name, value in (
+            ("title", title),
+            ("content", content),
+            ("content_right", content_right),
+        )
+        if value is not None
+    ]
+    return {
+        "file_uri": meta.uri,
+        "size_bytes": meta.size_bytes,
+        "etag": meta.etag,
+        "download_url": build_download_url(meta.uri, user.user_id),
+        "summary": (
+            f"Updated slide {slide_index} of {meta.uri} "
+            f"(fields: {', '.join(fields_changed) or 'none'})"
+        ),
+    }
+
+
 async def pptx_read(file_uri: str) -> dict[str, Any]:
     """Return slide titles and body text.
 
@@ -108,5 +191,5 @@ async def pptx_read(file_uri: str) -> dict[str, Any]:
 
 
 # Register with FastMCP imperatively — see tools/docx_tools.py for the why.
-for _fn in (pptx_create, pptx_add_slide, pptx_read):
+for _fn in (pptx_create, pptx_add_slide, pptx_update_slide, pptx_read):
     register_tool(_fn)

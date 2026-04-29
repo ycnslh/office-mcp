@@ -117,3 +117,99 @@ def test_title_runs_get_theme_color() -> None:
     rgb = runs[0].font.color.rgb
     cyan = pptx_engine.THEMES["cyberpunk"].title
     assert rgb == cyan
+
+
+def test_update_slide_fills_bullets_on_existing_slide() -> None:
+    """User-reported case: deck has a title-only slide, the next call
+    must populate it with bullets — not append a new slide."""
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(data, layout="content", title="Highlights")
+
+    data = pptx_engine.update_slide(
+        data, index=1, content=["First", "Second", "Third"]
+    )
+
+    parsed = pptx_engine.read(data)
+    assert parsed["slide_count"] == 2
+    assert parsed["slides"][1]["title"] == "Highlights"
+    assert parsed["slides"][1]["body"] == ["First", "Second", "Third"]
+
+
+def test_update_slide_replaces_existing_bullets() -> None:
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(
+        data, layout="content", title="Highlights", content=["old A", "old B"]
+    )
+
+    data = pptx_engine.update_slide(data, index=1, content=["new only"])
+
+    parsed = pptx_engine.read(data)
+    assert parsed["slides"][1]["body"] == ["new only"]
+
+
+def test_update_slide_can_rewrite_title_only() -> None:
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(
+        data, layout="content", title="Old", content=["keep me"]
+    )
+
+    data = pptx_engine.update_slide(data, index=1, title="New title")
+
+    parsed = pptx_engine.read(data)
+    assert parsed["slides"][1]["title"] == "New title"
+    assert parsed["slides"][1]["body"] == ["keep me"]
+
+
+def test_update_slide_two_content_replaces_both_columns() -> None:
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(
+        data,
+        layout="two-content",
+        title="Pros / Cons",
+        content=["fast"],
+        content_right=["fragile"],
+    )
+
+    data = pptx_engine.update_slide(
+        data,
+        index=1,
+        content=["fast", "cheap"],
+        content_right=["fragile", "lock-in"],
+    )
+
+    prs = Presentation(BytesIO(data))
+    slide = prs.slides[1]
+    left = [p.text for p in slide.placeholders[1].text_frame.paragraphs]
+    right = [p.text for p in slide.placeholders[2].text_frame.paragraphs]
+    assert left == ["fast", "cheap"]
+    assert right == ["fragile", "lock-in"]
+
+
+def test_update_slide_clears_bullets_when_passed_empty_list() -> None:
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(
+        data, layout="content", title="Trim me", content=["a", "b"]
+    )
+
+    data = pptx_engine.update_slide(data, index=1, content=[])
+
+    parsed = pptx_engine.read(data)
+    assert parsed["slides"][1]["body"] == []
+
+
+def test_update_slide_raises_on_out_of_range_index() -> None:
+    data = pptx_engine.create(title="Deck")  # one slide
+    with pytest.raises(IndexError, match="out of range"):
+        pptx_engine.update_slide(data, index=5, title="oops")
+
+
+def test_update_slide_silently_skips_missing_placeholder() -> None:
+    """Section layout has no body placeholder — passing content is a
+    no-op rather than an error so a confused LLM doesn't crash on
+    layout mismatch."""
+    data = pptx_engine.create(title="Deck")
+    data = pptx_engine.add_slide(data, layout="section", title="Divider")
+
+    # Should not raise; content silently dropped because placeholder
+    # idx 1 may not exist on a section header.
+    pptx_engine.update_slide(data, index=1, content=["ignored"])
