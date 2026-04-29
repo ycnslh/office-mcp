@@ -86,8 +86,14 @@ jobs:
           OFFICE_MCP_MAX_FILE_SIZE_MB=50
           OFFICE_MCP_RATE_LIMIT_PER_MIN=60
           OFFICE_MCP_SIGNING_SECRET=e885a1ec740aa3318faf6e0fea64481eb71717eb2c290938827f8ece570d056e
-          OFFICE_MCP_DOWNLOAD_BASE_URL=http://localhost:18080
+          OFFICE_MCP_DOWNLOAD_BASE_URL=https://office-mcp.h.reho.dev
           OFFICE_MCP_DOWNLOAD_URL_TTL_SECONDS=900
+          OFFICE_MCP_PUBLIC_BASE_URL=https://office-mcp.h.reho.dev
+
+          # Azure AD / Microsoft Graph (delegated OAuth → user OneDrive)
+          AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
 
           # LibreChat dev stack
           LIBRECHAT_VERSION=v0.8.4
@@ -103,13 +109,17 @@ jobs:
           MINIMAX_MODEL=MiniMax-M2.7
           EOF
 
-      - name: Validate MiniMax API key is present
+      - name: Validate required secrets are present
         run: |
-          val=$(grep '^MINIMAX_API_KEY=' .env | cut -d= -f2-)
-          if [ -z "$val" ]; then
-            echo "Missing required GitHub secret: MINIMAX_API_KEY"
-            exit 1
-          fi
+          missing=0
+          for var in MINIMAX_API_KEY AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+            val=$(grep "^${var}=" .env | cut -d= -f2-)
+            if [ -z "$val" ]; then
+              echo "Missing required GitHub secret: ${var}"
+              missing=1
+            fi
+          done
+          [ $missing -eq 0 ] || exit 1
           echo ".env validated"
 
       - name: Stop existing containers
@@ -118,7 +128,7 @@ jobs:
           docker rm  office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
 
       - name: Build and start full stack
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build -d
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml up --build -d
 
       - name: Wait for office-mcp health
         run: |
@@ -132,7 +142,7 @@ jobs:
             sleep 10
             if [ $i -eq 18 ]; then
               echo "office-mcp did not become healthy within 3 minutes"
-              docker compose -f docker-compose.yml -f docker-compose.librechat.yml logs office-mcp
+              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs office-mcp
               exit 1
             fi
           done
@@ -149,7 +159,7 @@ jobs:
             sleep 10
           done
           echo "LibreChat did not become healthy within 5 minutes"
-          docker compose -f docker-compose.yml -f docker-compose.librechat.yml logs librechat
+          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs librechat
           exit 1
 
       - name: Smoke tests
@@ -169,4 +179,4 @@ jobs:
 
       - name: Container status
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml ps
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml ps

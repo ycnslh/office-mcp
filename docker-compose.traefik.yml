@@ -1,0 +1,31 @@
+# ─────────────────────────────────────────────────────────────────────
+# Optional override — exposes office-mcp via an existing Traefik
+# instance on the host (used by the pixel deployment).
+#
+# Append it to the compose command:
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.librechat.yml \
+#                  -f docker-compose.traefik.yml up --build -d
+#
+# Requires:
+#   - a running Traefik watching the `proxy-network`
+#   - a `letsencrypt` certResolver configured on Traefik
+#   - DNS for `office-mcp.h.reho.dev` pointing to the host
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  office-mcp:
+    networks:
+      - office-mcp
+      - proxy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy-network"
+      - "traefik.http.routers.office-mcp.rule=Host(`office-mcp.h.reho.dev`)"
+      - "traefik.http.routers.office-mcp.entrypoints=websecure"
+      - "traefik.http.routers.office-mcp.tls.certresolver=letsencrypt"
+      - "traefik.http.services.office-mcp.loadbalancer.server.port=8080"
+
+networks:
+  proxy-network:
+    external: true
