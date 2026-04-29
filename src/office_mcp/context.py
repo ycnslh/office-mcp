@@ -26,6 +26,9 @@ class UserContext:
 _CURRENT: ContextVar[UserContext | None] = ContextVar(
     "office_mcp_current_user", default=None
 )
+_MCP_SESSION_ID: ContextVar[str | None] = ContextVar(
+    "office_mcp_session_id", default=None
+)
 
 
 def current_user() -> UserContext | None:
@@ -44,6 +47,16 @@ def require_current_user() -> UserContext:
     return user
 
 
+def current_mcp_session_id() -> str | None:
+    """Return the ``Mcp-Session-Id`` header bound to the in-flight request.
+
+    Set by :class:`~office_mcp.server.UserContextMiddleware` from the
+    transport-layer session header. ``None`` outside of a request scope
+    or before any /mcp POST has minted a session.
+    """
+    return _MCP_SESSION_ID.get()
+
+
 @contextmanager
 def bind_user(ctx: UserContext) -> Iterator[None]:
     """Bind ``ctx`` as the current request's user, restoring on exit."""
@@ -52,3 +65,13 @@ def bind_user(ctx: UserContext) -> Iterator[None]:
         yield
     finally:
         _CURRENT.reset(token)
+
+
+@contextmanager
+def bind_mcp_session_id(session_id: str | None) -> Iterator[None]:
+    """Bind ``session_id`` for the in-flight request, restoring on exit."""
+    token = _MCP_SESSION_ID.set(session_id)
+    try:
+        yield
+    finally:
+        _MCP_SESSION_ID.reset(token)

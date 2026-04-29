@@ -271,3 +271,46 @@ def test_auth_endpoints_return_503_when_oauth_disabled(tmp_path: Path) -> None:
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+def test_callback_links_session_when_started_by_a_tool(
+    running_server: tuple[str, MagicMock],
+) -> None:
+    """Phase 7c integration: a tool calls ``start_oauth_flow(session_id)``,
+    the user completes consent on Microsoft, the callback hits us — and
+    the token must now be retrievable by ``mcp_session_id`` so the next
+    tool call in the same chat session resolves it without re-auth."""
+    from office_mcp.auth.flow import start_oauth_flow
+    from office_mcp.runtime import get_token_store
+
+    base, msal_app = running_server
+    msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "delegated-AT",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+        "id_token_claims": {
+            "oid": "oid-yacine",
+            "preferred_username": "yacine@netwatch.fr",
+            "email": "yacine@netwatch.fr",
+        },
+    }
+
+    # Tool side: mint a state bound to "session-S1".
+    # NOTE: in production a tool runs inside the uvicorn worker, but
+    # here we mutate the same in-process TokenStore directly. The test
+    # thread and the server thread share the singleton wired by
+    # build_app() — that's the only reason this works without a real
+    # tool call routed through /mcp.
+    state, _ = start_oauth_flow(mcp_session_id="session-S1")
+
+    # Microsoft side: redirect back to /auth/callback with that state.
+    callback = httpx.get(
+        f"{base}/auth/callback?code=auth-code&state={state}", timeout=5
+    )
+    assert callback.status_code == 200
+
+    # Tool side again, in the same MCP transport session.
+    entry = get_token_store().get_token_for_session("session-S1")
+    assert entry is not None
+    assert entry.access_token == "delegated-AT"
+    assert entry.user_upn == "yacine@netwatch.fr"

@@ -94,6 +94,85 @@ async def test_user_context_email_optional() -> None:
     assert response.json() == {"user_id": "alice", "email": None}
 
 
+@pytest.mark.asyncio
+async def test_user_context_attaches_session_token_when_available() -> None:
+    """Phase 7c: an Mcp-Session-Id header that resolves in the token
+    store causes the middleware to stamp the access token onto the
+    bound UserContext, so cloud backends can act on the user's behalf.
+    """
+    import time
+
+    from office_mcp.auth.store import TokenEntry, TokenStore
+    from office_mcp.runtime import set_token_store
+
+    store = TokenStore()
+    store.put_token(
+        "state-X",
+        TokenEntry(
+            access_token="bound-AT",
+            refresh_token=None,
+            expires_at=time.time() + 3600,
+            user_oid="oid-1",
+            user_upn="alice@example.com",
+        ),
+    )
+    store.link_session_to_state("session-S1", "state-X")
+    set_token_store(store)
+
+    async def _whoami_with_token(_: Request) -> JSONResponse:
+        user = current_user()
+        return JSONResponse(
+            {"on_behalf_of_token": user.on_behalf_of_token if user else None}
+        )
+
+    app = Starlette(
+        routes=[Route("/whoami", _whoami_with_token)],
+        middleware=[Middleware(UserContextMiddleware)],
+    )
+
+    response = await _get(
+        app,
+        "/whoami",
+        headers={
+            "X-LibreChat-User-Id": "alice",
+            "Mcp-Session-Id": "session-S1",
+        },
+    )
+
+    assert response.json() == {"on_behalf_of_token": "bound-AT"}
+
+
+@pytest.mark.asyncio
+async def test_user_context_no_token_when_session_unknown() -> None:
+    """No leak: an unknown Mcp-Session-Id results in no token attached."""
+    from office_mcp.auth.store import TokenStore
+    from office_mcp.runtime import set_token_store
+
+    set_token_store(TokenStore())
+
+    async def _whoami_with_token(_: Request) -> JSONResponse:
+        user = current_user()
+        return JSONResponse(
+            {"on_behalf_of_token": user.on_behalf_of_token if user else None}
+        )
+
+    app = Starlette(
+        routes=[Route("/whoami", _whoami_with_token)],
+        middleware=[Middleware(UserContextMiddleware)],
+    )
+
+    response = await _get(
+        app,
+        "/whoami",
+        headers={
+            "X-LibreChat-User-Id": "alice",
+            "Mcp-Session-Id": "session-never-seen",
+        },
+    )
+
+    assert response.json() == {"on_behalf_of_token": None}
+
+
 # ── BearerAuthMiddleware ─────────────────────────────────────────────
 
 

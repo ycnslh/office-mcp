@@ -20,8 +20,9 @@ from typing import Any, TypeVar
 import structlog
 
 from office_mcp import metrics
-from office_mcp.context import current_user
+from office_mcp.context import current_mcp_session_id, current_user
 from office_mcp.runtime import mcp
+from office_mcp.utils.errors import AuthRequiredError
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -57,7 +58,14 @@ def _logger() -> Any:
 
 
 def instrumented(fn: F) -> F:
-    """Wrap ``fn`` so each call logs + records Prometheus metrics."""
+    """Wrap ``fn`` so each call logs + records Prometheus metrics.
+
+    Also intercepts :class:`AuthRequiredError` from cloud backends and
+    converts it into a structured ``auth_required`` response shape with
+    a Microsoft login URL. Phase 7c — without this, every Graph-touching
+    tool would surface a raw exception to the LLM instead of the URL
+    the user needs to click.
+    """
     tool_name = fn.__name__
 
     @functools.wraps(fn)
@@ -70,6 +78,43 @@ def instrumented(fn: F) -> F:
         start = time.perf_counter()
         try:
             result = await fn(*args, **kwargs)
+        except AuthRequiredError as exc:
+            duration = time.perf_counter() - start
+            metrics.tool_calls.labels(tool=tool_name, status="auth_required").inc()
+            metrics.tool_duration_seconds.labels(tool=tool_name).observe(duration)
+            log.info(
+                "tool_auth_required",
+                duration_ms=round(duration * 1000, 2),
+                detail=str(exc)[:200],
+            )
+            # Local imports: ``flow`` pulls runtime helpers, which import
+            # the auth package — keeping these lazy avoids the cycle.
+            from office_mcp.auth.flow import auth_required_response
+            from office_mcp.auth.store import PendingStoreFull
+
+            try:
+                return auth_required_response(current_mcp_session_id())
+            except RuntimeError:
+                # OAuth not configured (no Azure creds) — surface a clear
+                # message instead of a misleading "click here" URL.
+                return {
+                    "auth_required": True,
+                    "summary": (
+                        "Cloud backend access requires Microsoft auth, "
+                        "but Azure AD is not configured on this server."
+                    ),
+                }
+            except PendingStoreFull:
+                # Pending-claim store at capacity — same shape as the
+                # other auth_required branches so the LLM doesn't have
+                # to learn a third response variant.
+                return {
+                    "auth_required": True,
+                    "summary": (
+                        "Trop de tentatives d'authentification simultanées "
+                        "sur ce serveur. Réessayez dans quelques instants."
+                    ),
+                }
         except Exception as exc:
             duration = time.perf_counter() - start
             metrics.tool_calls.labels(tool=tool_name, status="error").inc()
