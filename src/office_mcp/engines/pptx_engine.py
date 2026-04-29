@@ -109,6 +109,7 @@ def add_slide(
     title: str,
     content: list[str] | None = None,
     content_right: list[str] | None = None,
+    subtitle: str | None = None,
     theme: str = DEFAULT_THEME,
 ) -> bytes:
     """Append a slide using the named ``layout`` and populate its shapes."""
@@ -121,14 +122,16 @@ def add_slide(
     slide = _add_layout_slide(prs, layout)
     _set_title(slide, title, theme)
 
-    if layout == "content" and content:
+    if layout == "title" and subtitle:
+        _set_subtitle(slide, subtitle, theme)
+    elif layout == "content" and content:
         _fill_bullets(slide, placeholder_idx=1, lines=content, theme=theme)
     elif layout == "two-content":
         if content:
             _fill_bullets(slide, placeholder_idx=1, lines=content, theme=theme)
         if content_right:
             _fill_bullets(slide, placeholder_idx=2, lines=content_right, theme=theme)
-    # section / blank / title: title-only, nothing else to fill.
+    # section / blank: title-only, nothing else to fill.
 
     _apply_background(slide, theme)
     return _dump(prs)

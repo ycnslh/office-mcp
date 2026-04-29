@@ -111,7 +111,9 @@ created → clickable download in the conversation).
 
 1. `office://rules/pptx` resource read.
 2. `pptx_create(theme="cyberpunk", title=..., subtitle=...)`.
-3. Five `pptx_add_slide` calls with the right layouts.
+3. A mix of layout-specific add calls: `pptx_add_section_slide`,
+   `pptx_add_content_slide` (with a required ``bullets`` array),
+   `pptx_add_two_content_slide`, etc.
 4. Reply with the signed download URL.
 
 **Why it lands:**
@@ -119,9 +121,9 @@ created → clickable download in the conversation).
 - Themes are visible: cyberpunk = dark background, cyan title,
   magenta accents. Client sees that "theme" is a real knob, not
   cosmetic flavor.
-- Five distinct layouts in one deck: `title` / `section` /
-  `content` / `two-content`. Demonstrates the LLM navigates them by
-  name, not by numeric index.
+- One tool per slide flavour (title / section / content /
+  two-content). The LLM picks by tool name, never by enum — works
+  even on weaker models that struggle with optional array params.
 
 ---
 
