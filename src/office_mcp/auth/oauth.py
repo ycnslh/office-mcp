@@ -20,10 +20,17 @@ from office_mcp.auth.store import TokenEntry
 
 log = structlog.get_logger(__name__)
 
-# Delegated scopes — match the API permissions granted on the app reg.
-# `offline_access` is what unlocks the refresh token. `User.Read` lets
-# us populate `oid` / `preferred_username` claims in the ID token.
-SCOPES: tuple[str, ...] = ("Files.ReadWrite", "User.Read", "offline_access")
+# Delegated scopes — only the application-specific ones. MSAL Python
+# *rejects* the OIDC reserved scopes (`openid`, `profile`, `offline_access`)
+# when passed explicitly: confidential clients get them — and the
+# associated refresh token — added implicitly. `User.Read` is what
+# populates `oid` / `preferred_username` in the ID token.
+SCOPES: tuple[str, ...] = ("Files.ReadWrite", "User.Read")
+
+#: MSAL refuses these as explicit scope inputs (see msal.application
+#: ``_decorate_scope``). Kept here so the assertion test can catch a
+#: future regression at lint time rather than in production.
+_MSAL_RESERVED_SCOPES: frozenset[str] = frozenset({"openid", "profile", "offline_access"})
 
 
 @dataclass(frozen=True, slots=True)
