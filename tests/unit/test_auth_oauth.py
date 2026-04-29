@@ -13,7 +13,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from office_mcp.auth.oauth import SCOPES, OAuthClient, OAuthConfig, OAuthError
+from office_mcp.auth.oauth import (
+    _MSAL_RESERVED_SCOPES,
+    SCOPES,
+    OAuthClient,
+    OAuthConfig,
+    OAuthError,
+)
 
 CONFIG = OAuthConfig(
     tenant_id="tenant-id",
@@ -36,6 +42,16 @@ def fake_msal_app(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 def test_authority_uses_tenant_id() -> None:
     assert CONFIG.authority == "https://login.microsoftonline.com/tenant-id"
+
+
+def test_scopes_dont_include_msal_reserved_values() -> None:
+    """msal.application._decorate_scope raises on openid/profile/offline_access.
+
+    Caught in prod after PR #1 — unit tests mocked MSAL so the validation
+    never ran. This assertion is the cheap regression guard.
+    """
+    intersect = _MSAL_RESERVED_SCOPES.intersection(SCOPES)
+    assert not intersect, f"reserved MSAL scopes leaked into SCOPES: {sorted(intersect)}"
 
 
 def test_build_auth_url_passes_state_and_redirect(fake_msal_app: MagicMock) -> None:
