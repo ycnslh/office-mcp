@@ -34,3 +34,20 @@ class StorageNotFoundError(StorageError):
 
 class PreconditionFailedError(StorageError):
     """Optimistic concurrency check (``if_match`` / ETag) did not match."""
+
+
+class AuthRequiredError(StorageError):
+    """The backend requires user authentication that has not been provided.
+
+    Cloud backends (Graph, future Drive) raise this when ``user_ctx`` does
+    not carry an access token. The MCP layer maps it to a tool response
+    that instructs the LLM to direct the user to ``/auth/login``.
+    """
+
+
+class BackendUnavailableError(StorageError):
+    """The backend returned a 5xx or otherwise transient failure.
+
+    Distinct from :class:`StorageNotFoundError` and :class:`PreconditionFailedError`
+    — those are caller-fixable; this one usually means "try again later".
+    """

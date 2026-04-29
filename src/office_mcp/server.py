@@ -45,7 +45,7 @@ from office_mcp.runtime import (
     set_settings,
     set_token_store,
 )
-from office_mcp.storage import LocalBackend, StorageRegistry
+from office_mcp.storage import GraphBackend, LocalBackend, StorageRegistry
 from office_mcp.utils import signing
 from office_mcp.utils.errors import StorageNotFoundError
 
@@ -362,6 +362,11 @@ def _bootstrap(settings: Settings) -> None:
     set_settings(settings)
     registry = StorageRegistry()
     registry.register(LocalBackend(root=settings.local_root))
+    if settings.oauth_configured:
+        # Only register the Graph backend when Azure AD is wired —
+        # otherwise `od://` URIs raise UnknownSchemeError, which is
+        # the right signal in dev where creds are absent.
+        registry.register(GraphBackend())
     set_registry(registry)
 
     set_token_store(TokenStore())
