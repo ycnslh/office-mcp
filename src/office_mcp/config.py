@@ -81,4 +81,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Lets tests instantiate `Settings(azure_tenant_id="...")` even
+        # though the env-side alias is the un-prefixed `AZURE_TENANT_ID`.
+        populate_by_name=True,
     )
