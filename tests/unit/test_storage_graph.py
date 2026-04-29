@@ -16,7 +16,7 @@ import pytest_asyncio
 from pytest_httpx import HTTPXMock
 
 from office_mcp.context import UserContext
-from office_mcp.storage.graph import GraphBackend, _GRAPH_BASE
+from office_mcp.storage.graph import _GRAPH_BASE, GraphBackend
 from office_mcp.utils.errors import (
     AuthRequiredError,
     BackendUnavailableError,
@@ -56,6 +56,13 @@ async def test_path_traversal_rejected(backend: GraphBackend) -> None:
 
 
 @pytest.mark.asyncio
+async def test_empty_path_segment_rejected(backend: GraphBackend) -> None:
+    """``od://foo//bar`` would 404 confusingly at Graph; reject early."""
+    with pytest.raises(PathTraversalError):
+        await backend.read("od://foo//bar.txt", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
 async def test_invalid_uri_scheme_rejected(backend: GraphBackend) -> None:
     with pytest.raises(InvalidUriError):
         await backend.read("local://x.txt", user_ctx=_user("AT"))
@@ -87,6 +94,29 @@ async def test_read_returns_bytes(
     assert data == b"hello world"
     request = httpx_mock.get_requests()[-1]
     assert request.headers["Authorization"] == "Bearer AT"
+
+
+@pytest.mark.asyncio
+async def test_read_follows_graph_302_to_cdn(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """Real Graph 302s the bytes onto a short-lived CDN URL.
+
+    follow_redirects=True is the production default; this test locks
+    that behavior so a refactor can't silently flip it to False.
+    """
+    cdn_url = "https://cdn.example.com/blob/abc"
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="GET",
+        status_code=302,
+        headers={"Location": cdn_url},
+    )
+    httpx_mock.add_response(url=cdn_url, method="GET", content=b"payload")
+
+    data = await backend.read("od://q.docx", user_ctx=_user("AT"))
+
+    assert data == b"payload"
 
 
 @pytest.mark.asyncio
@@ -143,6 +173,30 @@ async def test_write_returns_metadata_with_etag(
     assert request.headers["Authorization"] == "Bearer AT"
     assert request.headers["Content-Type"] == "application/octet-stream"
     assert request.read() == b"hello world"
+
+
+@pytest.mark.asyncio
+async def test_write_prefers_etag_over_ctag(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """Optimistic concurrency uses ``eTag`` (item-wide), not ``cTag``
+    (content-only). Locks the contract so a refactor can't silently
+    switch which header drives ``If-Match``."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+            "eTag": '"correct"',
+            "cTag": '"wrong"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+    meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    assert meta.etag == '"correct"'
 
 
 @pytest.mark.asyncio
@@ -391,13 +445,13 @@ async def test_list_follows_odata_next_link(
 
 
 @pytest.mark.asyncio
-async def test_each_user_token_maps_to_a_distinct_drive(
+async def test_each_request_forwards_its_bearer_token(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
-    """Two different tokens hit the same /me/drive endpoint but the
-    server-side identity (and therefore the drive) is determined by
-    the bearer alone — verified here by asserting the Authorization
-    header attached to each request."""
+    """The actual cross-user isolation is a Graph-side property of the
+    access token; pytest-httpx can only see what we send. So this test
+    asserts the narrower invariant we control: each call attaches the
+    user's own bearer token verbatim, never reusing or mixing them."""
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content",
         method="GET",
@@ -464,6 +518,36 @@ async def test_5xx_maps_to_backend_unavailable(
         await backend.read("od://x.txt", user_ctx=_user("AT"))
 
 
+@pytest.mark.asyncio
+async def test_429_surfaces_retry_after(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """Graph throttles aggressively; the LLM needs the Retry-After hint."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content",
+        method="GET",
+        status_code=429,
+        headers={"Retry-After": "12"},
+    )
+    with pytest.raises(BackendUnavailableError, match="retry after 12"):
+        await backend.read("od://x.txt", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_507_surfaces_quota_message(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """OneDrive quota exhaustion is permanent until freed — clearer
+    than the generic "backend unavailable" string."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/big.bin:/content",
+        method="PUT",
+        status_code=507,
+    )
+    with pytest.raises(BackendUnavailableError, match="quota"):
+        await backend.write("od://big.bin", b"x", user_ctx=_user("AT"))
+
+
 # ── bootstrap registers `od` only when oauth is configured ─────────────
 
 
@@ -471,7 +555,13 @@ def test_bootstrap_registers_od_only_when_oauth_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The deploy registers GraphBackend conditionally — verify here so a
-    refactor of build_app() can't silently drop the gate."""
+    refactor of build_app() can't silently drop the gate.
+
+    Relies on ``_bootstrap`` always rebuilding the registry on each call
+    (the ``_BOOTSTRAPPED`` early-return is *after* the registry block).
+    If that invariant moves, this test starts passing for the wrong
+    reason — keep them aligned.
+    """
     from unittest.mock import MagicMock
 
     from office_mcp.config import Settings

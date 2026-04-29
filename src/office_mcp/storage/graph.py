@@ -24,7 +24,6 @@ an upload session — TODO for a follow-up phase.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -83,8 +82,14 @@ class GraphBackend(StorageBackend):
         path = uri.removeprefix(f"{_SCHEME}://").lstrip("/")
         if not path or "\x00" in path:
             raise InvalidUriError(f"invalid URI path: {uri!r}")
-        if any(part == ".." for part in PurePosixPath(path).parts):
-            raise PathTraversalError(f"URI contains '..': {uri!r}")
+        # Reject ``..`` segments and empty segments (``foo//bar``). Empty
+        # segments collapse silently in PurePosixPath.parts but Graph
+        # rejects them with a confusing 404, so fail closed at parse time.
+        segments = path.split("/")
+        if any(s == ".." or s == "" for s in segments):
+            raise PathTraversalError(
+                f"URI contains '..' or empty segment: {uri!r}"
+            )
         return path
 
     @staticmethod
@@ -123,27 +128,39 @@ class GraphBackend(StorageBackend):
 
     @staticmethod
     def _raise_for_status(response: httpx.Response, uri: str) -> None:
-        if response.status_code < 400:
+        status = response.status_code
+        if status < 400:
             return
-        if response.status_code == 404:
+        if status == 404:
             raise StorageNotFoundError(uri)
-        if response.status_code == 412:
+        if status == 412:
             raise PreconditionFailedError(f"ETag mismatch for {uri}")
-        if response.status_code in (401, 403):
+        if status in (401, 403):
             raise AuthRequiredError(
                 f"Microsoft Graph rejected the access token for {uri} "
-                f"(status {response.status_code})"
+                f"(status {status})"
+            )
+        if status == 429:
+            # Graph throttles delegated /me/drive aggressively. Surface
+            # the Retry-After hint so the LLM can wait or back off.
+            retry_after = response.headers.get("Retry-After", "unspecified")
+            raise BackendUnavailableError(
+                f"Microsoft Graph throttled the request for {uri} "
+                f"(retry after {retry_after} seconds)"
+            )
+        if status == 507:
+            raise BackendUnavailableError(
+                f"OneDrive quota exhausted for {uri}"
             )
         raise BackendUnavailableError(
-            f"Microsoft Graph returned {response.status_code} for {uri}: "
-            f"{response.text[:200]}"
+            f"Microsoft Graph returned {status} for {uri}: {response.text[:200]}"
         )
 
     # ── StorageBackend API ──────────────────────────────────────────
 
     async def read(self, uri: str, *, user_ctx: UserContext) -> bytes:
-        path = self._path_from_uri(uri)
         token = self._require_token(user_ctx)
+        path = self._path_from_uri(uri)
         url = self._drive_url(path, suffix="content")
         response = await self._client.get(
             url,
@@ -162,13 +179,16 @@ class GraphBackend(StorageBackend):
         user_ctx: UserContext,
         if_match: str | None = None,
     ) -> FileMetadata:
+        # Order matches read/stat/delete: token check, then URI parse,
+        # then size check. Keeps the error class surfaced for an
+        # unauthenticated bad-URI call consistent across operations.
+        token = self._require_token(user_ctx)
+        path = self._path_from_uri(uri)
         if len(data) > _MAX_SIMPLE_PUT_BYTES:
             raise BackendUnavailableError(
                 f"file size {len(data)} exceeds simple-PUT cap "
                 f"({_MAX_SIMPLE_PUT_BYTES} bytes); upload sessions not yet wired"
             )
-        path = self._path_from_uri(uri)
-        token = self._require_token(user_ctx)
         url = self._drive_url(path, suffix="content")
         headers: dict[str, str] = {
             "Authorization": f"Bearer {token}",
@@ -181,8 +201,8 @@ class GraphBackend(StorageBackend):
         return self._to_metadata(uri, response.json())
 
     async def stat(self, uri: str, *, user_ctx: UserContext) -> FileMetadata:
-        path = self._path_from_uri(uri)
         token = self._require_token(user_ctx)
+        path = self._path_from_uri(uri)
         response = await self._client.get(
             self._drive_url(path),
             headers={"Authorization": f"Bearer {token}"},
@@ -230,8 +250,8 @@ class GraphBackend(StorageBackend):
                 url = payload.get("@odata.nextLink", "")
 
     async def delete(self, uri: str, *, user_ctx: UserContext) -> None:
-        path = self._path_from_uri(uri)
         token = self._require_token(user_ctx)
+        path = self._path_from_uri(uri)
         response = await self._client.delete(
             self._drive_url(path),
             headers={"Authorization": f"Bearer {token}"},
@@ -248,6 +268,6 @@ class GraphBackend(StorageBackend):
             )
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Graph unreachable: {exc}") from exc
-        if response.status_code >= 500:
+        if not (200 <= response.status_code < 300):
             raise RuntimeError(f"Graph $metadata returned {response.status_code}")
         return "ok"
