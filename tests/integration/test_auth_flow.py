@@ -13,6 +13,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -38,6 +39,12 @@ def _wait_ready(base_url: str, timeout_s: float = 5.0) -> None:
             pass
         time.sleep(0.1)
     raise RuntimeError(f"uvicorn did not become ready in {timeout_s}s")
+
+
+def _state_from_redirect(location: str) -> str:
+    """Extract the ``state`` query param from a Location header."""
+    qs = parse_qs(urlparse(location).query)
+    return qs["state"][0]
 
 
 @pytest.fixture
@@ -93,18 +100,7 @@ def running_server(
         thread.join(timeout=5)
 
 
-def test_login_redirects_to_microsoft(running_server: tuple[str, MagicMock]) -> None:
-    base, _ = running_server
-
-    response = httpx.get(f"{base}/auth/login?state=abc", follow_redirects=False, timeout=5)
-
-    assert response.status_code == 302
-    location = response.headers["location"]
-    assert "login.microsoftonline.com" in location
-    assert "state=abc" in location
-
-
-def test_login_generates_state_when_missing(
+def test_login_redirects_to_microsoft_with_server_generated_state(
     running_server: tuple[str, MagicMock],
 ) -> None:
     base, _ = running_server
@@ -112,7 +108,32 @@ def test_login_generates_state_when_missing(
     response = httpx.get(f"{base}/auth/login", follow_redirects=False, timeout=5)
 
     assert response.status_code == 302
-    assert "state=" in response.headers["location"]
+    location = response.headers["location"]
+    assert "login.microsoftonline.com" in location
+    state = _state_from_redirect(location)
+    # secrets.token_urlsafe(32) yields ≥ 43 url-safe characters.
+    assert len(state) >= 32
+
+
+def test_login_ignores_caller_supplied_state(
+    running_server: tuple[str, MagicMock],
+) -> None:
+    """A weak/known state from a caller must NEVER be honoured.
+
+    The state is a capability — it is generated server-side only.
+    """
+    base, _ = running_server
+
+    response = httpx.get(
+        f"{base}/auth/login?state=weak-attacker-supplied",
+        follow_redirects=False,
+        timeout=5,
+    )
+
+    assert response.status_code == 302
+    state = _state_from_redirect(response.headers["location"])
+    assert state != "weak-attacker-supplied"
+    assert len(state) >= 32
 
 
 def test_callback_exchanges_code_and_marks_authenticated(
@@ -130,23 +151,22 @@ def test_callback_exchanges_code_and_marks_authenticated(
         },
     }
 
-    # /auth/login registers the state as pending.
-    httpx.get(f"{base}/auth/login?state=K7M2X9", follow_redirects=False, timeout=5)
+    # Drive /auth/login to register a fresh server-generated state.
+    login = httpx.get(f"{base}/auth/login", follow_redirects=False, timeout=5)
+    state = _state_from_redirect(login.headers["location"])
 
-    # Microsoft would redirect here.
+    # Microsoft would redirect back here.
     callback = httpx.get(
-        f"{base}/auth/callback?code=auth-code&state=K7M2X9", timeout=5
+        f"{base}/auth/callback?code=auth-code&state={state}", timeout=5
     )
     assert callback.status_code == 200
+    # The HTML page intentionally exposes the UPN to the user's browser.
     assert "alice@contoso.com" in callback.text
 
-    # /auth/status now reports success.
-    status = httpx.get(f"{base}/auth/status?state=K7M2X9", timeout=5)
+    # /auth/status must NOT echo identity claims — only liveness.
+    status = httpx.get(f"{base}/auth/status?state={state}", timeout=5)
     assert status.status_code == 200
-    body = status.json()
-    assert body["authenticated"] is True
-    assert body["user"]["oid"] == "oid-1"
-    assert body["user"]["upn"] == "alice@contoso.com"
+    assert status.json() == {"authenticated": True}
 
 
 def test_callback_rejects_unknown_state(running_server: tuple[str, MagicMock]) -> None:
@@ -225,7 +245,7 @@ def test_auth_endpoints_exempt_from_bearer_when_token_set(
     server, thread, base = _start_server(settings)
     try:
         response = httpx.get(
-            f"{base}/auth/login?state=t1", follow_redirects=False, timeout=5
+            f"{base}/auth/login", follow_redirects=False, timeout=5
         )
         assert response.status_code == 302
     finally:

@@ -55,7 +55,7 @@ ignore = ["E501"]
 known-first-party = ["office_mcp"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S106"]  # asserts and dummy secret literals are expected in tests
+"tests/**" = ["S101", "S105", "S106"]  # asserts and token-shaped literals are expected in tests
 
 [tool.mypy]
 python_version = "3.12"

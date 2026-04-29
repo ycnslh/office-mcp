@@ -11,13 +11,14 @@ tool calls can then read OneDrive on the user's behalf.
 """
 
 from office_mcp.auth.oauth import OAuthClient, OAuthConfig, OAuthError
-from office_mcp.auth.store import PendingAuth, TokenEntry, TokenStore
+from office_mcp.auth.store import PendingAuth, PendingStoreFull, TokenEntry, TokenStore
 
 __all__ = [
     "OAuthClient",
     "OAuthConfig",
     "OAuthError",
     "PendingAuth",
+    "PendingStoreFull",
     "TokenEntry",
     "TokenStore",
 ]

@@ -1,10 +1,21 @@
 """HTTP endpoints driving the Azure AD authorization-code flow.
 
-* ``GET /auth/login``     — redirects the user to Microsoft's consent page.
-* ``GET /auth/callback``  — Microsoft sends the user back here with a code;
-                            we exchange it and stash the resulting tokens.
-* ``GET /auth/status``    — JSON probe so callers (tools, the user, the LLM)
-                            can verify a given ``state`` has been satisfied.
+* ``GET /auth/login``     — server generates a ``state`` and redirects to
+                            Microsoft's consent page. The state IS a
+                            capability (Phase 7c uses it to find a token
+                            for a given chat session), so it is never
+                            caller-supplied — only :func:`secrets.token_urlsafe`
+                            output crosses the wire.
+* ``GET /auth/callback``  — Microsoft sends the user back here with a
+                            code; we exchange it on a worker thread and
+                            stash the resulting tokens keyed by ``state``.
+* ``GET /auth/status``    — liveness probe: returns ``{"authenticated": bool}``.
+                            Identity claims (oid/upn/email) are deliberately
+                            **not** returned here — possession of a state
+                            must not disclose user identity to anyone who
+                            happens to know it. The HTML success page
+                            shows the UPN to the actual user in their
+                            browser, which is the only place it belongs.
 
 Routes are registered as side-effects of importing this module, which
 :func:`office_mcp.server._bootstrap` does once. They are exempted from
@@ -16,6 +27,7 @@ instead.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from html import escape
@@ -25,20 +37,15 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from office_mcp.auth.oauth import OAuthError
-from office_mcp.auth.store import PendingAuth
+from office_mcp.auth.store import PendingAuth, PendingStoreFull
 from office_mcp.runtime import get_oauth_client, get_token_store, mcp
 
 log = structlog.get_logger(__name__)
 
 
 @mcp.custom_route("/auth/login", methods=["GET"])
-async def _auth_login(request: Request) -> Response:
-    """Kick off the OAuth code flow.
-
-    Query params:
-      ``state``  optional caller-supplied claim code. When omitted the server
-                 generates one with :func:`secrets.token_urlsafe` (16 bytes).
-    """
+async def _auth_login(_: Request) -> Response:
+    """Kick off the OAuth code flow with a freshly minted state."""
     try:
         client = get_oauth_client()
     except RuntimeError:
@@ -48,16 +55,24 @@ async def _auth_login(request: Request) -> Response:
         )
     store = get_token_store()
 
-    state = request.query_params.get("state") or secrets.token_urlsafe(16)
-    store.remember_pending(
-        PendingAuth(
-            state=state,
-            created_at=time.time(),
-            redirect_uri=client.redirect_uri,
+    state = secrets.token_urlsafe(32)
+    try:
+        store.remember_pending(
+            PendingAuth(
+                state=state,
+                created_at=time.time(),
+                redirect_uri=client.redirect_uri,
+            )
         )
-    )
+    except PendingStoreFull as exc:
+        log.warning("oauth.login.store_full", error=str(exc))
+        return JSONResponse(
+            {"error": "auth backend busy, retry shortly"},
+            status_code=503,
+        )
+
     auth_url = client.build_auth_url(state=state)
-    log.info("oauth.login", state=state)
+    log.info("oauth.login", state_prefix=state[:8])
     return RedirectResponse(auth_url, status_code=302)
 
 
@@ -87,21 +102,23 @@ async def _auth_callback(request: Request) -> Response:
 
     pending = store.consume_pending(state)
     if pending is None:
-        log.warning("oauth.callback.unknown_state", state=state)
+        log.warning("oauth.callback.unknown_state", state_prefix=state[:8])
         return JSONResponse(
             {"error": "unknown or expired state"},
             status_code=400,
         )
 
     try:
-        entry = client.exchange_code(code=code)
+        # MSAL hits Microsoft over HTTPS synchronously (~hundreds of ms);
+        # off-load it so the event loop keeps serving other requests.
+        entry = await asyncio.to_thread(client.exchange_code, code=code)
     except OAuthError as exc:
         return _result_page(success=False, message=str(exc))
 
     store.put_token(state, entry)
     log.info(
         "oauth.callback.ok",
-        state=state,
+        state_prefix=state[:8],
         user_oid=entry.user_oid,
         user_upn=entry.user_upn,
     )
@@ -116,7 +133,15 @@ async def _auth_callback(request: Request) -> Response:
 
 @mcp.custom_route("/auth/status", methods=["GET"])
 async def _auth_status(request: Request) -> Response:
-    """Report whether a given ``state`` has a usable token."""
+    """Liveness probe — ``{"authenticated": bool}``, no identity claims.
+
+    We deliberately do not return ``oid`` / ``upn`` / ``email`` here:
+    the ``state`` is a capability that may flow through URLs and chat
+    transcripts, and disclosing user identity to anyone who guesses or
+    intercepts a state would be a confidentiality leak. The actual UPN
+    is shown only on the success page rendered to the consenting user's
+    browser.
+    """
     try:
         get_oauth_client()
     except RuntimeError:
@@ -128,20 +153,9 @@ async def _auth_status(request: Request) -> Response:
         return JSONResponse({"error": "missing 'state' query parameter"}, status_code=400)
 
     entry = store.get_token(state)
-    if entry is None:
+    if entry is None or entry.is_expired():
         return JSONResponse({"authenticated": False})
-    if entry.is_expired():
-        return JSONResponse({"authenticated": False, "reason": "token expired"})
-    return JSONResponse(
-        {
-            "authenticated": True,
-            "user": {
-                "oid": entry.user_oid,
-                "upn": entry.user_upn,
-                "email": entry.user_email,
-            },
-        }
-    )
+    return JSONResponse({"authenticated": True})
 
 
 def _result_page(*, success: bool, message: str) -> HTMLResponse:

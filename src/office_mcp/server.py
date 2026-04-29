@@ -132,11 +132,27 @@ async def _download(request: Request) -> Response:
 # transport are not buffered into memory.
 
 
+#: Routes served without the bearer token. Exact-match (not prefix) so
+#: a future router upgrade or an oddly-encoded path can't slip past
+#: gating into ``/mcp``. ``/files/`` keeps the prefix check below
+#: because it carries a path parameter.
+_PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/metrics",
+        "/auth/login",
+        "/auth/callback",
+        "/auth/status",
+    }
+)
+
+
 class BearerAuthMiddleware:
     """Reject requests missing a valid ``Authorization: Bearer <token>``.
 
-    No-ops when ``expected_token`` is ``None``. Always lets ``/health``
-    through so Docker healthchecks and uptime probes don't need the token.
+    No-ops when ``expected_token`` is ``None``. Lets a closed set of
+    public paths through (probes, signed downloads, OAuth flow) — see
+    :data:`_PUBLIC_PATHS` and the ``/files/`` prefix below.
     """
 
     def __init__(self, app: ASGIApp, expected_token: str | None) -> None:
@@ -149,15 +165,10 @@ class BearerAuthMiddleware:
             return
         path = scope.get("path", "")
         # /health, /metrics: probes / scrapers don't send the bearer.
-        # /files/*: its own per-request auth lives in the HMAC-signed token.
         # /auth/*: drives the user-facing OAuth flow before any bearer
         #          token is in scope; gating is via the OAuth `state`.
-        if (
-            path == "/health"
-            or path == "/metrics"
-            or path.startswith("/files/")
-            or path.startswith("/auth/")
-        ):
+        # /files/*: its own per-request auth lives in the HMAC-signed token.
+        if path in _PUBLIC_PATHS or path.startswith("/files/"):
             await self.app(scope, receive, send)
             return
         auth = _header(scope, b"authorization")

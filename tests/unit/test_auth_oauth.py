@@ -133,3 +133,30 @@ def test_refresh_raises_on_msal_error(fake_msal_app: MagicMock) -> None:
 def test_redirect_uri_property_exposes_config_value(fake_msal_app: MagicMock) -> None:
     client = OAuthClient(CONFIG)
     assert client.redirect_uri == CONFIG.redirect_uri
+
+
+def test_exchange_code_raises_when_id_token_lacks_oid(fake_msal_app: MagicMock) -> None:
+    """An access token without identity claims is unusable downstream."""
+    fake_msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "AT",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+        "id_token_claims": {"preferred_username": "alice@contoso.com"},  # missing oid
+    }
+    client = OAuthClient(CONFIG)
+
+    with pytest.raises(OAuthError, match="oid"):
+        client.exchange_code(code="code")
+
+
+def test_exchange_code_raises_when_id_token_lacks_upn(fake_msal_app: MagicMock) -> None:
+    fake_msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "AT",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+        "id_token_claims": {"oid": "oid-1"},  # missing preferred_username
+    }
+    client = OAuthClient(CONFIG)
+
+    with pytest.raises(OAuthError, match="upn"):
+        client.exchange_code(code="code")

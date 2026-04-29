@@ -97,11 +97,24 @@ def _to_entry_or_raise(result: dict[str, Any], *, action: str) -> TokenEntry:
         raise OAuthError(f"oauth {action} failed: {description}")
 
     id_claims = result.get("id_token_claims") or {}
+    oid = id_claims.get("oid")
+    upn = id_claims.get("preferred_username")
+    if not oid or not upn:
+        # Should never happen with `openid` + `User.Read` in scope, but
+        # silently storing an entry with empty oid/upn would make
+        # subsequent lookups match by accident — fail closed.
+        log.warning(
+            "oauth.missing_id_claims",
+            action=action,
+            claims_keys=sorted(id_claims),
+        )
+        raise OAuthError(f"oauth {action} succeeded but id_token lacked oid/upn")
+
     return TokenEntry(
         access_token=str(result["access_token"]),
         refresh_token=result.get("refresh_token"),
         expires_at=time.time() + int(result.get("expires_in", 3600)),
-        user_oid=str(id_claims.get("oid", "")),
-        user_upn=str(id_claims.get("preferred_username", "")),
+        user_oid=str(oid),
+        user_upn=str(upn),
         user_email=id_claims.get("email"),
     )

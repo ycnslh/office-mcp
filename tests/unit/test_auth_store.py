@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import time
 
-from office_mcp.auth.store import PendingAuth, TokenEntry, TokenStore
+import pytest
+
+from office_mcp.auth.store import PendingAuth, PendingStoreFull, TokenEntry, TokenStore
 
 
 def _entry(**overrides: object) -> TokenEntry:
@@ -109,3 +111,26 @@ def test_is_expired_with_leeway() -> None:
 
     past = _entry(expires_at=time.time() - 1)
     assert past.is_expired()
+
+
+def test_remember_pending_raises_when_at_capacity() -> None:
+    store = TokenStore()
+    # Force a tiny cap so the test stays fast.
+    store.MAX_PENDING = 3  # type: ignore[misc]
+    for i in range(3):
+        store.remember_pending(_claim(f"s{i}"))
+
+    with pytest.raises(PendingStoreFull):
+        store.remember_pending(_claim("overflow"))
+
+
+def test_token_purged_after_ttl() -> None:
+    # 0-second TTL → every put_token immediately makes the next get
+    # see the entry as expired and purge it.
+    store = TokenStore(token_ttl_seconds=0)
+    store.put_token("s1", _entry())
+    # A small sleep guarantees ``time.time() - ttl`` lands strictly
+    # after the insertion timestamp.
+    time.sleep(0.01)
+    assert store.get_token("s1") is None
+    assert store.token_count() == 0
