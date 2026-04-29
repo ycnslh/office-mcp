@@ -19,25 +19,46 @@ _INSTRUCTIONS = """\
 office-mcp creates and edits Word, Excel and PowerPoint documents.
 
 ADDRESSING FILES
-  Every tool takes a `file_uri` like `local://path/to/file.ext`.
-  In this deployment, ONLY the `local://` scheme is wired — do not invent
-  `s3://`, `az://`, `sp://` or `od://` URIs (Phases 7-8 will add them).
+  Every tool takes a `file_uri` like `<scheme>://path/to/file.ext`.
+  Two schemes are available in this deployment:
+    - `local://`  — the user's per-account scratch space on the server.
+                    Always available, no auth required. Use it for
+                    drafts, scratch files, and anything the user did not
+                    explicitly ask to put in the cloud.
+    - `od://`     — the user's Microsoft OneDrive (delegated OAuth).
+                    Use when the user mentions OneDrive, Office 365,
+                    "my files in the cloud", or asks to save somewhere
+                    they can open from their Microsoft account.
   Path components are scoped per user, so a leading `/` is unnecessary.
+  Examples: `local://reports/q3.docx`, `od://Documents/q3.docx`.
+
+AUTHENTICATION FOR od://
+  The first tool call that touches `od://` in a fresh chat returns
+  `{"auth_required": true, "login_url": "...", "summary": "..."}`
+  instead of the normal payload. When you see that:
+    1. Surface the `login_url` to the user EXACTLY as a Markdown link —
+       do not paraphrase, do not strip query parameters.
+    2. Stop and wait for the user to confirm they have signed in.
+    3. Once they say they are back, RETRY the same tool call with the
+       same arguments — the server picks up the new token automatically.
+  Never try to bypass `auth_required` by switching to `local://` unless
+  the user explicitly asks you to.
 
 WORKFLOW
   1. Before creating a document, consult the matching `office://rules/<format>`
      resource (docx, xlsx, pptx) for formatting conventions.
   2. Compose the document with the granular tools (create → write/append →
      read to verify).
-  3. Every mutating tool returns a `download_url` — render it as a Markdown
-     link in your answer so the user can click to download the file
-     directly from the conversation. Example:
-       `→ [q3.docx](http://host:18080/files/...)`
+  3. Every mutating tool on `local://` returns a `download_url` — render
+     it as a Markdown link in your answer so the user can click to
+     download the file directly from the conversation. Example:
+       `→ [q3.docx](https://office-mcp.h.reho.dev/files/...)`
   4. Always echo the resulting `file_uri` alongside the download link.
 
 ERROR HANDLING
-  If a tool returns an UnknownSchemeError or InvalidUriError, RE-CALL the
-  tool with `local://...` instead of guessing another scheme.
+  If a tool returns `UnknownSchemeError` or `InvalidUriError`, the URI
+  is malformed — fix the scheme/path and retry. Don't silently fall
+  back to a different storage location.
 """
 
 mcp: FastMCP = FastMCP("office-mcp", instructions=_INSTRUCTIONS)
