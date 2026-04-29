@@ -16,7 +16,6 @@ from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
-from starlette.datastructures import Headers
 from starlette.requests import Request
 
 from office_mcp.auth.store import TokenEntry, TokenStore
