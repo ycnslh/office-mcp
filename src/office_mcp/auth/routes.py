@@ -116,11 +116,17 @@ async def _auth_callback(request: Request) -> Response:
         return _result_page(success=False, message=str(exc))
 
     store.put_token(state, entry)
+    # Phase 7c: if the flow was started by a tool, the pending claim
+    # carried the originating MCP session id. Index it so the next tool
+    # call in the same session resolves to this token automatically.
+    if pending.mcp_session_id:
+        store.link_session_to_state(pending.mcp_session_id, state)
     log.info(
         "oauth.callback.ok",
         state_prefix=state[:8],
         user_oid=entry.user_oid,
         user_upn=entry.user_upn,
+        bound_session=bool(pending.mcp_session_id),
     )
     return _result_page(
         success=True,

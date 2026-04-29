@@ -13,6 +13,11 @@ tool calls can then read OneDrive on the user's behalf.
 from office_mcp.auth.oauth import OAuthClient, OAuthConfig, OAuthError
 from office_mcp.auth.store import PendingAuth, PendingStoreFull, TokenEntry, TokenStore
 
+# ``office_mcp.auth.flow`` is intentionally NOT re-exported here: it
+# imports from :mod:`office_mcp.runtime`, which itself imports this
+# package — re-exporting would create an import cycle. Consumers
+# (instrumentation wrappers, tests) import from the submodule directly.
+
 __all__ = [
     "OAuthClient",
     "OAuthConfig",

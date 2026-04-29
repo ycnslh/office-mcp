@@ -35,10 +35,16 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from office_mcp import __version__, metrics
 from office_mcp.auth import OAuthClient, OAuthConfig, TokenStore
 from office_mcp.config import Settings
-from office_mcp.context import UserContext, bind_user, current_user
+from office_mcp.context import (
+    UserContext,
+    bind_mcp_session_id,
+    bind_user,
+    current_user,
+)
 from office_mcp.instrumentation import setup_logging
 from office_mcp.runtime import (
     get_registry,
+    get_token_store,
     mcp,
     set_oauth_client,
     set_registry,
@@ -302,6 +308,12 @@ class UserContextMiddleware:
     is a literal ``{{...}}`` placeholder — LibreChat 0.8.4 does not substitute
     header placeholders in chat mode (upstream bug #9910), so without this
     fallback the whole MCP surface is unreachable from a plain chat.
+
+    Also reads the ``Mcp-Session-Id`` transport header and, when the
+    :class:`~office_mcp.auth.store.TokenStore` has a token bound to that
+    session, stamps ``user_ctx.on_behalf_of_token`` so cloud backends
+    (Graph, future Drive) can act on the user's behalf without each
+    tool re-implementing the lookup. Phase 7c.
     """
 
     def __init__(self, app: ASGIApp, fallback_user_id: str = "demo-user") -> None:
@@ -314,10 +326,39 @@ class UserContextMiddleware:
             return
         raw_user = _header(scope, b"x-librechat-user-id")
         raw_email = _header(scope, b"x-librechat-user-email")
+        session_id = _header(scope, b"mcp-session-id") or None
         user_id = raw_user if _looks_like_real_id(raw_user) else self._fallback
         email = raw_email if _looks_like_real_id(raw_email) else None
-        with bind_user(UserContext(user_id=user_id, email=email)):
+
+        access_token = _lookup_session_token(session_id)
+
+        ctx = UserContext(
+            user_id=user_id,
+            email=email,
+            on_behalf_of_token=access_token,
+        )
+        with bind_user(ctx), bind_mcp_session_id(session_id):
             await self.app(scope, receive, send)
+
+
+def _lookup_session_token(session_id: str | None) -> str | None:
+    """Best-effort lookup of an OAuth access token for an MCP session.
+
+    Returns ``None`` when no session id was supplied, the token store
+    is not initialised (e.g. in tests that bypass ``build_app``), the
+    session has never been linked to a state, or the token has expired.
+    Never raises — failures here must not break unrelated requests.
+    """
+    if not session_id:
+        return None
+    try:
+        store = get_token_store()
+    except RuntimeError:
+        return None
+    entry = store.get_token_for_session(session_id)
+    if entry is None or entry.is_expired():
+        return None
+    return entry.access_token
 
 
 def _looks_like_real_id(value: str) -> bool:

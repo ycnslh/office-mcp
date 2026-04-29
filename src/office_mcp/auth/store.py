@@ -86,6 +86,11 @@ class TokenStore:
         self._pending: dict[str, PendingAuth] = {}
         self._tokens: dict[str, TokenEntry] = {}
         self._token_inserted_at: dict[str, float] = {}
+        # Secondary index for Phase 7c: an MCP transport session id can
+        # be looked up to retrieve the token belonging to that session.
+        # Filled by /auth/callback when the matching PendingAuth carried
+        # a session id at /auth/login time.
+        self._session_to_state: dict[str, str] = {}
         self._lock = Lock()
 
     # ── pending claims ─────────────────────────────────────────────────
@@ -133,6 +138,38 @@ class TokenStore:
         with self._lock:
             self._tokens.pop(state, None)
             self._token_inserted_at.pop(state, None)
+            # Drop any session indices that pointed at this state.
+            self._session_to_state = {
+                sid: s for sid, s in self._session_to_state.items() if s != state
+            }
+
+    # ── session ↔ state index ──────────────────────────────────────────
+
+    def link_session_to_state(self, mcp_session_id: str, state: str) -> None:
+        """Record that ``mcp_session_id`` should resolve to ``state``.
+
+        Called from ``/auth/callback`` when the redeemed pending claim
+        carried a session id (i.e. the flow was started by a tool that
+        knew its caller's MCP transport session). Multiple sessions can
+        point at the same state if the user re-uses a token across
+        chats — we don't enforce uniqueness.
+        """
+        with self._lock:
+            self._session_to_state[mcp_session_id] = state
+
+    def get_token_for_session(self, mcp_session_id: str) -> TokenEntry | None:
+        """Return the (non-expired) token bound to ``mcp_session_id``."""
+        with self._lock:
+            self._purge_expired_tokens_locked()
+            state = self._session_to_state.get(mcp_session_id)
+            if state is None:
+                return None
+            entry = self._tokens.get(state)
+            if entry is None:
+                # Token was purged or evicted; clean up the orphan link.
+                self._session_to_state.pop(mcp_session_id, None)
+                return None
+            return entry
 
     def token_count(self) -> int:
         with self._lock:
