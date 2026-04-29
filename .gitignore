@@ -58,3 +58,6 @@ tmp/
 librechat-data/
 mongodb-data/
 meili-data/
+
+# Claude Code — local-only (per-machine permissions)
+.claude/settings.local.json
