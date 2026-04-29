@@ -74,6 +74,7 @@ def instrumented(fn: F) -> F:
         log = _logger().bind(
             tool=tool_name,
             user_id=user.user_id if user else None,
+            args=_sanitise_args(kwargs),
         )
         start = time.perf_counter()
         try:
@@ -136,6 +137,46 @@ def instrumented(fn: F) -> F:
         return result
 
     return wrapper  # type: ignore[return-value]
+
+
+#: Cap on the visible portion of a string-valued arg in the structured log.
+#: Long enough to keep URIs and short prompts intact, short enough that a
+#: stray document body doesn't blow up the log line.
+_ARG_PREVIEW_CHARS = 120
+
+
+def _sanitise_args(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Render a structured-log-friendly preview of a tool's kwargs.
+
+    The goal is diagnostic visibility — *what* the LLM passed and roughly
+    how big it was — without dumping document text or base64 images into
+    the logs. Strings get truncated; lists are summarised by length and a
+    sample of element types; bytes-like values are summarised by length;
+    other shapes show their type name.
+    """
+    out: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        if value is None:
+            out[key] = None
+        elif isinstance(value, bool):
+            out[key] = value
+        elif isinstance(value, int | float):
+            out[key] = value
+        elif isinstance(value, str):
+            if len(value) <= _ARG_PREVIEW_CHARS:
+                out[key] = value
+            else:
+                out[key] = f"{value[:_ARG_PREVIEW_CHARS]}…(+{len(value) - _ARG_PREVIEW_CHARS} chars)"
+        elif isinstance(value, list | tuple):
+            element_types = sorted({type(v).__name__ for v in value})
+            out[key] = f"<{type(value).__name__} len={len(value)} types={element_types}>"
+        elif isinstance(value, bytes | bytearray):
+            out[key] = f"<{type(value).__name__} len={len(value)}>"
+        elif isinstance(value, dict):
+            out[key] = f"<dict keys={sorted(value)}>"
+        else:
+            out[key] = f"<{type(value).__name__}>"
+    return out
 
 
 def register_tool(fn: F) -> F:

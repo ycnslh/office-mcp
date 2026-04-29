@@ -134,6 +134,47 @@ def add_slide(
     return _dump(prs)
 
 
+def update_slide(
+    data: bytes,
+    *,
+    index: int,
+    title: str | None = None,
+    content: list[str] | None = None,
+    content_right: list[str] | None = None,
+    theme: str = DEFAULT_THEME,
+) -> bytes:
+    """Mutate the slide at ``index`` (0-based) in-place.
+
+    Each field is optional and only acted on when supplied:
+
+    * ``title``: replaces the slide title (no-op if the slide has no
+      title placeholder).
+    * ``content``: replaces the bullets in placeholder idx 1.
+    * ``content_right``: replaces the bullets in placeholder idx 2.
+
+    Bullet replacements clear the existing paragraphs first so the
+    caller doesn't end up with the old and new lists concatenated.
+    Targets a placeholder that doesn't exist on the slide (e.g.
+    passing ``content`` to a section/title layout) is silently
+    ignored — we don't pretend to know the layout's intent.
+    """
+    _require_theme(theme)
+    prs = Presentation(BytesIO(data))
+    slides = list(prs.slides)
+    if not 0 <= index < len(slides):
+        raise IndexError(
+            f"slide index {index} out of range (deck has {len(slides)} slides)"
+        )
+    slide = slides[index]
+    if title is not None:
+        _set_title(slide, title, theme)
+    if content is not None:
+        _replace_bullets(slide, placeholder_idx=1, lines=content, theme=theme)
+    if content_right is not None:
+        _replace_bullets(slide, placeholder_idx=2, lines=content_right, theme=theme)
+    return _dump(prs)
+
+
 def read(data: bytes) -> dict[str, Any]:
     """Extract slide titles and body text for LLM consumption."""
     prs = Presentation(BytesIO(data))
@@ -231,6 +272,26 @@ def _fill_bullets(
         para = tf.add_paragraph()
         para.text = line
     _style_text_frame(tf, color=palette.body, font=palette.font, size_pt=palette.body_pt)
+
+
+def _replace_bullets(
+    slide: Any, *, placeholder_idx: int, lines: list[str], theme: str
+) -> None:
+    """Clear and refill the bullet placeholder at ``placeholder_idx``.
+
+    ``_fill_bullets`` assumes a fresh placeholder; on an existing slide
+    it would *append* to the current paragraph list. ``_replace_bullets``
+    drops the old paragraphs first, then delegates back to ``_fill_bullets``
+    so styling stays consistent.
+    """
+    placeholder = _placeholder(slide, placeholder_idx)
+    if placeholder is None:
+        return
+    tf = placeholder.text_frame
+    tf.clear()
+    if not lines:
+        return
+    _fill_bullets(slide, placeholder_idx=placeholder_idx, lines=lines, theme=theme)
 
 
 def _placeholder(slide: Any, idx: int) -> Any | None:
