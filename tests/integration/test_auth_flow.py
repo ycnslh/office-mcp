@@ -273,6 +273,104 @@ def test_auth_endpoints_return_503_when_oauth_disabled(tmp_path: Path) -> None:
         thread.join(timeout=5)
 
 
+def test_auth_start_redirects_to_microsoft_using_pending_state(
+    running_server: tuple[str, MagicMock],
+) -> None:
+    """``/auth/start/{state}`` is the short, our-domain redirect that
+    tools surface to the LLM. It must look up the pending claim and
+    302-redirect to the upstream Microsoft authorize URL with the same
+    state — without consuming the claim, so the callback can still
+    redeem it.
+    """
+    from office_mcp.auth.flow import start_oauth_flow
+
+    base, _ = running_server
+
+    # A tool minted a state via auth_required_response → start_oauth_flow.
+    state, _ = start_oauth_flow(mcp_session_id="session-A")
+
+    response = httpx.get(
+        f"{base}/auth/start/{state}", follow_redirects=False, timeout=5
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert "login.microsoftonline.com" in location
+    assert _state_from_redirect(location) == state
+
+
+def test_auth_start_404s_on_unknown_state(
+    running_server: tuple[str, MagicMock],
+) -> None:
+    base, _ = running_server
+
+    response = httpx.get(f"{base}/auth/start/never-issued", timeout=5)
+
+    assert response.status_code == 404
+
+
+def test_auth_start_does_not_consume_pending_claim(
+    running_server: tuple[str, MagicMock],
+) -> None:
+    """If /auth/start redeemed the claim, the callback below would 400
+    on the same state — that would break the whole flow."""
+    from office_mcp.auth.flow import start_oauth_flow
+    from office_mcp.runtime import get_token_store
+
+    base, msal_app = running_server
+    msal_app.acquire_token_by_authorization_code.return_value = {
+        "access_token": "AT",
+        "refresh_token": "RT",
+        "expires_in": 3600,
+        "id_token_claims": {
+            "oid": "oid-1",
+            "preferred_username": "alice@contoso.com",
+        },
+    }
+    state, _ = start_oauth_flow(mcp_session_id="session-peek")
+
+    # User clicks the short URL (peek path).
+    httpx.get(f"{base}/auth/start/{state}", follow_redirects=False, timeout=5)
+    # Microsoft redirects back. The callback must still find the
+    # pending claim — i.e. /auth/start did not pop it.
+    callback = httpx.get(
+        f"{base}/auth/callback?code=auth-code&state={state}", timeout=5
+    )
+    assert callback.status_code == 200
+    assert get_token_store().get_token_for_session("session-peek") is not None
+
+
+def test_auth_start_exempt_from_bearer_when_token_set(
+    tmp_path: Path, fake_msal: MagicMock
+) -> None:
+    """Tools call /auth/start before the user has any bearer; like
+    /auth/login it must work without ``Authorization``."""
+    from office_mcp.auth.flow import start_oauth_flow
+
+    port = _free_port()
+    settings = Settings(
+        host="127.0.0.1",
+        port=port,
+        token="shared-bearer-secret",  # noqa: S106 — dummy literal for tests
+        log_level="warning",
+        local_root=tmp_path,
+        public_base_url=f"http://127.0.0.1:{port}",
+        azure_tenant_id="tenant-id",
+        azure_client_id="client-id",
+        azure_client_secret="secret",  # noqa: S106 — dummy literal for tests
+    )
+    server, thread, base = _start_server(settings)
+    try:
+        state, _ = start_oauth_flow(mcp_session_id="session-bearer")
+        response = httpx.get(
+            f"{base}/auth/start/{state}", follow_redirects=False, timeout=5
+        )
+        assert response.status_code == 302
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+
+
 def test_callback_links_session_when_started_by_a_tool(
     running_server: tuple[str, MagicMock],
 ) -> None:
