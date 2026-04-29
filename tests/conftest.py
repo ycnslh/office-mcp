@@ -6,17 +6,19 @@ from collections.abc import Iterator
 
 import pytest
 
-from office_mcp.runtime import set_registry
+from office_mcp.runtime import set_oauth_client, set_registry, set_token_store
 
 
 @pytest.fixture(autouse=True)
 def _reset_process_state() -> Iterator[None]:
-    """Reset the process-wide storage registry after every test.
+    """Reset process-wide singletons after every test.
 
-    Prevents registry leakage between tests that bootstrap different
-    storage roots.
+    Prevents leakage between tests that bootstrap different storage
+    roots, OAuth credentials, or token stores.
     """
     try:
         yield
     finally:
         set_registry(None)
+        set_oauth_client(None)
+        set_token_store(None)

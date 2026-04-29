@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from office_mcp.auth import OAuthClient, TokenStore
 from office_mcp.config import Settings
 from office_mcp.storage import StorageRegistry
 from office_mcp.utils import signing
@@ -74,6 +75,41 @@ def get_settings() -> Settings:
 def set_settings(settings: Settings | None) -> None:
     global _settings
     _settings = settings
+
+
+_oauth_client: OAuthClient | None = None
+_token_store: TokenStore | None = None
+
+
+def get_oauth_client() -> OAuthClient:
+    """Return the OAuth client or raise — call after :func:`build_app`.
+
+    Raises :class:`RuntimeError` when the Azure credentials are not configured;
+    callers should map that to a 503 for the ``/auth/*`` endpoints.
+    """
+    if _oauth_client is None:
+        raise RuntimeError(
+            "OAuthClient not initialised — Azure credentials missing or "
+            "build_app() did not run."
+        )
+    return _oauth_client
+
+
+def set_oauth_client(client: OAuthClient | None) -> None:
+    global _oauth_client
+    _oauth_client = client
+
+
+def get_token_store() -> TokenStore:
+    """Return the process-wide token store. Always set by :func:`build_app`."""
+    if _token_store is None:
+        raise RuntimeError("TokenStore not initialised — build_app() must run first.")
+    return _token_store
+
+
+def set_token_store(store: TokenStore | None) -> None:
+    global _token_store
+    _token_store = store
 
 
 def build_download_url(uri: str, user_id: str) -> str | None:
