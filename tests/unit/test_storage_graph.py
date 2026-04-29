@@ -244,6 +244,67 @@ async def test_write_412_raises_precondition_failed(
 
 
 @pytest.mark.asyncio
+async def test_write_retries_through_brief_resource_lock(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OneDrive locks an Office file for ~seconds after a write while
+    SharePoint propagates. We swallow the 423 transparently rather
+    than asking the LLM to recover (it does poorly — observed in
+    production with MiniMax cloning the file under a v2 name)."""
+    # Speed up the test by collapsing the backoff schedule.
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    # Two 423s, then a 200 — the call must succeed.
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        status_code=423,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        status_code=423,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+            "eTag": '"new"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+    meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    assert meta.etag == '"new"'
+    # The single user-visible operation made three HTTP calls.
+    assert len(httpx_mock.get_requests()) == 3
+
+
+@pytest.mark.asyncio
+async def test_write_surfaces_unavailable_when_lock_persists(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If retries don't clear the lock we surface the error instead of
+    looping forever."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    for _ in range(3):  # initial + 2 retries
+        httpx_mock.add_response(
+            url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+            method="PUT",
+            status_code=423,
+        )
+
+    with pytest.raises(BackendUnavailableError, match="423"):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
 async def test_write_rejects_files_above_simple_put_cap(
     backend: GraphBackend,
 ) -> None:

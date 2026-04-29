@@ -23,6 +23,7 @@ an upload session — TODO for a follow-up phase.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
@@ -49,6 +50,13 @@ _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=5.0)
 #: Graph rejects PUT to ``:/content`` past this size. Larger files need
 #: an upload session, which we'll wire in a follow-up phase.
 _MAX_SIMPLE_PUT_BYTES = 4 * 1024 * 1024
+
+#: Microsoft Graph briefly locks an Office file after a write while
+#: SharePoint propagates and any open Office Online preview releases
+#: it (HTTP 423 ``resourceLocked``). Rapid successive edits from the
+#: LLM trip this in practice — we retry transparently with backoff
+#: rather than asking the model to recover, which it does poorly.
+_RETRY_LOCKED_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 
 class GraphBackend(StorageBackend):
@@ -196,9 +204,46 @@ class GraphBackend(StorageBackend):
         }
         if if_match is not None:
             headers["If-Match"] = if_match
-        response = await self._client.put(url, content=data, headers=headers)
+        response = await self._retry_on_423(
+            "PUT",
+            url,
+            uri,
+            content=data,
+            headers=headers,
+        )
         self._raise_for_status(response, uri)
         return self._to_metadata(uri, response.json())
+
+    async def _retry_on_423(
+        self,
+        method: str,
+        url: str,
+        uri: str,
+        **request_kwargs: Any,
+    ) -> httpx.Response:
+        """Issue a Graph request, retrying through the brief 423 lock window.
+
+        OneDrive/SharePoint locks an Office file for a few seconds
+        after each write while it propagates and any open Office Online
+        preview lets go. The lock returns HTTP 423 ``resourceLocked``;
+        a small bounded retry transparently waits it out instead of
+        bubbling a confusing error up to the LLM, which would otherwise
+        clone the file and rename it (we observed that with MiniMax in
+        production).
+        """
+        for delay in (0.0, *_RETRY_LOCKED_DELAYS_S):
+            if delay:
+                await asyncio.sleep(delay)
+            response = await self._client.request(method, url, **request_kwargs)
+            if response.status_code != 423:
+                return response
+            log.info(
+                "graph.resource_locked.retry",
+                uri=uri,
+                method=method,
+                next_delay_s=delay,
+            )
+        return response
 
     async def stat(self, uri: str, *, user_ctx: UserContext) -> FileMetadata:
         token = self._require_token(user_ctx)

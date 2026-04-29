@@ -148,3 +148,5 @@ def test_download_returns_404_for_missing_file(
     )
     response = httpx.get(f"{base_url}/files/{token}", timeout=5)
     assert response.status_code == 404
+
+

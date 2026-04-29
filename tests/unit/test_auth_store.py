@@ -164,6 +164,34 @@ def test_token_purged_after_ttl() -> None:
     assert store.token_count() == 0
 
 
+def test_get_state_for_session_returns_state_when_token_alive() -> None:
+    """``build_download_url`` reads this so a signed download URL can
+    embed the token-store key for ``od://`` URIs."""
+    store = TokenStore()
+    store.put_token("state-X", _entry())
+    store.link_session_to_state("session-1", "state-X")
+
+    assert store.get_state_for_session("session-1") == "state-X"
+
+
+def test_get_state_for_session_returns_none_when_unlinked() -> None:
+    store = TokenStore()
+    store.put_token("state-X", _entry())
+
+    assert store.get_state_for_session("never-linked") is None
+
+
+def test_get_state_for_session_drops_orphan_link_when_token_purged() -> None:
+    """Otherwise build_download_url could embed a state whose token no
+    longer exists, producing a download URL that 401s on first click."""
+    store = TokenStore(token_ttl_seconds=0)
+    store.put_token("state-X", _entry())
+    store.link_session_to_state("session-1", "state-X")
+    time.sleep(0.01)
+
+    assert store.get_state_for_session("session-1") is None
+
+
 def test_link_session_then_get_token_for_session_returns_entry() -> None:
     store = TokenStore()
     entry = _entry(access_token="for-session")

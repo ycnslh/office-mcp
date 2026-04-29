@@ -139,14 +139,32 @@ def build_download_url(uri: str, user_id: str) -> str | None:
     Requires both ``signing_secret`` and ``download_base_url`` in
     :class:`Settings`; returns ``None`` otherwise so tools can silently
     omit the ``download_url`` field when the operator has not enabled it.
+
+    For cloud-backed URIs (currently ``od://``) the download route
+    needs an OAuth token to fetch bytes from Microsoft Graph. We embed
+    the user's current OAuth ``state`` (token-store key) into the
+    signed claim so ``/files/{token}`` can resolve the right token at
+    request time. If no state is bound to the current MCP session the
+    download URL is still returned, but it will only succeed for URIs
+    whose backend doesn't need a per-user token (i.e. ``local://``).
     """
     settings = _settings
     if settings is None or not settings.signing_secret or not settings.download_base_url:
         return None
+    state: str | None = None
+    if uri.startswith("od://"):
+        # Lazy lookup so unit tests that don't wire context/store still
+        # exercise the local:// path.
+        from office_mcp.context import current_mcp_session_id
+
+        session_id = current_mcp_session_id()
+        if session_id and _token_store is not None:
+            state = _token_store.get_state_for_session(session_id)
     token = signing.sign(
         user_id=user_id,
         uri=uri,
         secret=settings.signing_secret,
         ttl_seconds=settings.download_url_ttl_seconds,
+        state=state,
     )
     return f"{settings.download_base_url.rstrip('/')}/files/{token}"

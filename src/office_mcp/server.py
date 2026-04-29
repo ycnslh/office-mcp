@@ -94,8 +94,18 @@ async def _prometheus_metrics(_: Request) -> Response:
 
 @mcp.custom_route("/files/{token}", methods=["GET"])
 async def _download(request: Request) -> Response:
-    """Serve a file referenced by a signed, user-scoped download token."""
-    from office_mcp.runtime import get_settings
+    """Serve a file referenced by a signed, user-scoped download token.
+
+    For cloud-backed URIs (``od://``) the signed claim must carry the
+    OAuth ``state`` minted at URL-creation time; we resolve the
+    matching access token from the in-process :class:`TokenStore` and
+    stamp it on the constructed :class:`UserContext` so the Graph
+    backend can call ``/me/drive``. URLs minted before this state-aware
+    flow (or for ``local://`` URIs that don't need a token) work
+    unchanged.
+    """
+    from office_mcp.runtime import get_settings, get_token_store
+    from office_mcp.utils.errors import AuthRequiredError
 
     token = request.path_params["token"]
     settings = get_settings()
@@ -112,7 +122,21 @@ async def _download(request: Request) -> Response:
         metrics.downloads_total.labels(status="forbidden").inc()
         return JSONResponse({"error": f"invalid token: {exc}"}, status_code=403)
 
-    user_ctx = UserContext(user_id=claims.user_id)
+    on_behalf_of_token: str | None = None
+    if claims.state is not None:
+        try:
+            store = get_token_store()
+        except RuntimeError:
+            store = None
+        if store is not None:
+            entry = store.get_token(claims.state)
+            if entry is not None and not entry.is_expired():
+                on_behalf_of_token = entry.access_token
+
+    user_ctx = UserContext(
+        user_id=claims.user_id,
+        on_behalf_of_token=on_behalf_of_token,
+    )
     try:
         backend = get_registry().get(claims.uri)
         data = await backend.read(claims.uri, user_ctx=user_ctx)
@@ -120,6 +144,16 @@ async def _download(request: Request) -> Response:
     except StorageNotFoundError:
         metrics.downloads_total.labels(status="not_found").inc()
         return JSONResponse({"error": "not found"}, status_code=404)
+    except AuthRequiredError:
+        # The signed link's embedded state has expired or never existed.
+        # Returning 401 here means "click the original link again from
+        # LibreChat after re-authenticating", which is what the user
+        # has to do anyway.
+        metrics.downloads_total.labels(status="auth_expired").inc()
+        return JSONResponse(
+            {"error": "OAuth session expired; reopen the file from chat"},
+            status_code=401,
+        )
 
     filename = claims.uri.rsplit("/", 1)[-1] or "download"
     metrics.downloads_total.labels(status="ok").inc()
