@@ -174,7 +174,11 @@ class BearerAuthMiddleware:
         # /auth/*: drives the user-facing OAuth flow before any bearer
         #          token is in scope; gating is via the OAuth `state`.
         # /files/*: its own per-request auth lives in the HMAC-signed token.
-        if path in _PUBLIC_PATHS or path.startswith("/files/"):
+        if (
+            path in _PUBLIC_PATHS
+            or path.startswith("/files/")
+            or path.startswith("/auth/start/")
+        ):
             await self.app(scope, receive, send)
             return
         auth = _header(scope, b"authorization")

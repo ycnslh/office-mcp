@@ -115,6 +115,18 @@ class TokenStore:
             self._purge_expired_pending_locked()
             return self._pending.pop(state, None)
 
+    def peek_pending(self, state: str) -> PendingAuth | None:
+        """Return the pending claim without removing it, or ``None``.
+
+        Used by the ``/auth/start/{state}`` redirect endpoint to confirm a
+        state still has a live pending claim before sending the user on to
+        Microsoft. The callback later calls :meth:`consume_pending` to redeem
+        it for real, so peek must not pop.
+        """
+        with self._lock:
+            self._purge_expired_pending_locked()
+            return self._pending.get(state)
+
     def pending_count(self) -> int:
         """Current number of un-redeemed pending claims (after purge)."""
         with self._lock:

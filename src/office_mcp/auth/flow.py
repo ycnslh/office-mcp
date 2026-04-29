@@ -83,15 +83,30 @@ def auth_required_response(mcp_session_id: str | None) -> dict[str, Any]:
 
         {
           "auth_required": true,
-          "login_url": "https://login.microsoftonline.com/.../authorize?...",
+          "login_url": "https://office-mcp.<host>/auth/start/<state>",
           "summary": "Authentification Microsoft requise. ..."
         }
+
+    The ``login_url`` points at *this server* — the ``/auth/start/{state}``
+    endpoint 302-redirects to the actual Microsoft authorize URL with the
+    same state. We do this because the upstream URL is ~250 characters
+    long with a UUID client_id; an LLM paraphrasing it into a Markdown
+    link can mistype the GUID by a single character (we hit this with
+    MiniMax in production: an inserted ``2`` made Azure return
+    AADSTS700016 "app not found"). Surfacing only our short, our-domain
+    URL keeps the LLM's transcription job trivial and the upstream URL
+    server-controlled.
 
     Raises :class:`RuntimeError` (via :func:`start_oauth_flow`) when
     Azure is not configured. The wrapper turns that into a different
     user-facing error so we don't lie about why a feature is unavailable.
     """
-    _, login_url = start_oauth_flow(mcp_session_id)
+    state, _ = start_oauth_flow(mcp_session_id)
+    from office_mcp.runtime import get_settings
+
+    settings = get_settings()
+    base = (settings.public_base_url or "").rstrip("/")
+    login_url = f"{base}/auth/start/{state}"
     return {
         "auth_required": True,
         "login_url": login_url,

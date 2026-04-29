@@ -30,6 +30,34 @@ def _claim(state: str, *, age_seconds: float = 0) -> PendingAuth:
     )
 
 
+def test_peek_pending_returns_claim_without_removing_it() -> None:
+    """``/auth/start/{state}`` peeks; the callback later consumes."""
+    store = TokenStore()
+    store.remember_pending(_claim("xyz"))
+
+    first = store.peek_pending("xyz")
+    second = store.peek_pending("xyz")
+    consumed = store.consume_pending("xyz")
+
+    assert first is not None
+    assert second is not None
+    assert first.state == "xyz"
+    # peek does not remove → second peek still finds the claim.
+    assert second.state == "xyz"
+    # consume after peek still works.
+    assert consumed is not None
+    assert consumed.state == "xyz"
+    # ...and only after consume is the claim gone.
+    assert store.peek_pending("xyz") is None
+
+
+def test_peek_pending_returns_none_for_expired_claim() -> None:
+    store = TokenStore(pending_ttl_seconds=10)
+    store.remember_pending(_claim("old", age_seconds=20))
+
+    assert store.peek_pending("old") is None
+
+
 def test_remember_and_consume_pending_round_trip() -> None:
     store = TokenStore()
     store.remember_pending(_claim("abc"))

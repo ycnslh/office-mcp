@@ -76,6 +76,42 @@ async def _auth_login(_: Request) -> Response:
     return RedirectResponse(auth_url, status_code=302)
 
 
+@mcp.custom_route("/auth/start/{state}", methods=["GET"])
+async def _auth_start(request: Request) -> Response:
+    """Short, our-domain redirect to the Microsoft authorize URL.
+
+    Tools call :func:`auth_required_response` which gives the LLM a
+    URL like ``https://office-mcp.h.reho.dev/auth/start/<state>`` to
+    surface to the human. The full Microsoft URL (~250 chars) is
+    rebuilt server-side here, so the model never has to render it
+    verbatim — it cannot then mistype the client_id while paraphrasing
+    a long URL into a Markdown link, which is what happened with
+    MiniMax in production (a single inserted ``2`` in the GUID
+    produced AADSTS700016).
+
+    The state must already correspond to a live pending claim — the
+    tool that mints it via :func:`start_oauth_flow` records the
+    pending entry with its MCP session id, and the callback below
+    consumes it for real. Peek (not consume) so the callback can
+    still redeem.
+    """
+    state = request.path_params["state"]
+    try:
+        client = get_oauth_client()
+    except RuntimeError:
+        return JSONResponse({"error": "OAuth not configured"}, status_code=503)
+    store = get_token_store()
+    pending = store.peek_pending(state)
+    if pending is None:
+        log.warning("oauth.start.unknown_state", state_prefix=state[:8])
+        return JSONResponse(
+            {"error": "unknown or expired state"},
+            status_code=404,
+        )
+    auth_url = client.build_auth_url(state=state)
+    return RedirectResponse(auth_url, status_code=302)
+
+
 @mcp.custom_route("/auth/callback", methods=["GET"])
 async def _auth_callback(request: Request) -> Response:
     """Receive Microsoft's redirect after consent and exchange the code."""

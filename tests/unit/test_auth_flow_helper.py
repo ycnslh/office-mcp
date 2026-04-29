@@ -15,7 +15,8 @@ import pytest
 from office_mcp.auth.flow import auth_required_response, start_oauth_flow
 from office_mcp.auth.oauth import OAuthClient, OAuthConfig
 from office_mcp.auth.store import TokenStore
-from office_mcp.runtime import set_oauth_client, set_token_store
+from office_mcp.config import Settings
+from office_mcp.runtime import set_oauth_client, set_settings, set_token_store
 
 CONFIG = OAuthConfig(
     tenant_id="tenant-id",
@@ -40,6 +41,7 @@ def wired_runtime(monkeypatch: pytest.MonkeyPatch) -> tuple[TokenStore, MagicMoc
     store = TokenStore()
     set_oauth_client(OAuthClient(CONFIG))
     set_token_store(store)
+    set_settings(Settings(public_base_url="https://office-mcp.test"))
     return store, fake_msal_app
 
 
@@ -92,10 +94,30 @@ def test_start_oauth_flow_raises_when_oauth_disabled() -> None:
 def test_auth_required_response_shape(
     wired_runtime: tuple[TokenStore, MagicMock],
 ) -> None:
+    """``login_url`` is the *short, our-domain* redirect — not the full
+    Microsoft URL — so the LLM has minimal surface to mistype when
+    surfacing it to the user. The redirect endpoint
+    (:mod:`office_mcp.auth.routes._auth_start`) rebuilds the upstream
+    URL server-side."""
     response = auth_required_response(mcp_session_id="session-1")
 
     assert response["auth_required"] is True
-    assert response["login_url"].startswith("https://login.microsoftonline.com/")
+    assert response["login_url"].startswith("https://office-mcp.test/auth/start/")
     # Markdown-link rendering on its own line so the LLM can't truncate
     # the URL by paraphrasing it inline.
     assert f"[Connectez-vous ici]({response['login_url']})" in response["summary"]
+
+
+def test_auth_required_response_state_in_url_matches_pending_claim(
+    wired_runtime: tuple[TokenStore, MagicMock],
+) -> None:
+    """The state baked into the short URL must be the same one that
+    /auth/start/{state} will look up — otherwise the redirect 404s."""
+    store, _ = wired_runtime
+    response = auth_required_response(mcp_session_id="session-1")
+
+    state = response["login_url"].rsplit("/", 1)[-1]
+    pending = store.peek_pending(state)
+
+    assert pending is not None
+    assert pending.mcp_session_id == "session-1"

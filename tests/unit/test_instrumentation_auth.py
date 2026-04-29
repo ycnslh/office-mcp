@@ -15,9 +15,10 @@ import pytest
 
 from office_mcp.auth.oauth import OAuthClient, OAuthConfig
 from office_mcp.auth.store import TokenStore
+from office_mcp.config import Settings
 from office_mcp.context import bind_mcp_session_id
 from office_mcp.instrumentation import instrumented
-from office_mcp.runtime import set_oauth_client, set_token_store
+from office_mcp.runtime import set_oauth_client, set_settings, set_token_store
 from office_mcp.utils.errors import AuthRequiredError
 
 CONFIG = OAuthConfig(
@@ -41,6 +42,7 @@ def wired_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     set_oauth_client(OAuthClient(CONFIG))
     set_token_store(TokenStore())
+    set_settings(Settings(public_base_url="https://office-mcp.test"))
 
 
 @pytest.mark.asyncio
@@ -66,7 +68,9 @@ async def test_wrapper_converts_auth_required_to_login_url_response(
         result = await instrumented(needs_auth)()
 
     assert result["auth_required"] is True
-    assert result["login_url"].startswith("https://login.microsoftonline.com/")
+    # The login URL is now our short, our-domain redirect; the actual
+    # Microsoft URL is rebuilt server-side by /auth/start/{state}.
+    assert result["login_url"].startswith("https://office-mcp.test/auth/start/")
     assert "Connectez-vous" in result["summary"]
 
 
