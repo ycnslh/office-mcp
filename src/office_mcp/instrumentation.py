@@ -158,9 +158,7 @@ def _sanitise_args(kwargs: dict[str, Any]) -> dict[str, Any]:
     for key, value in kwargs.items():
         if value is None:
             out[key] = None
-        elif isinstance(value, bool):
-            out[key] = value
-        elif isinstance(value, int | float):
+        elif isinstance(value, bool | int | float):
             out[key] = value
         elif isinstance(value, str):
             if len(value) <= _ARG_PREVIEW_CHARS:
