@@ -84,7 +84,9 @@ def _build_from_http() -> tuple[UserContext, str | None] | None:
 
     user_id = raw_user if _looks_like_real_id(raw_user) else _DEFAULT_USER_ID
     email = raw_email if _looks_like_real_id(raw_email) else None
-    access_token = _lookup_session_token(session_id)
+    access_token = _extract_user_bearer(
+        headers.get("x-user-authorization") or ""
+    ) or _lookup_session_token(session_id)
 
     return (
         UserContext(
@@ -94,6 +96,23 @@ def _build_from_http() -> tuple[UserContext, str | None] | None:
         ),
         session_id,
     )
+
+
+def _extract_user_bearer(raw: str) -> str | None:
+    """Return the access token forwarded by LibreChat, or ``None``.
+
+    The ``X-User-Authorization`` header carries the user's OIDC access
+    token (LibreChat >= 0.8.5 substitutes ``{{LIBRECHAT_OPENID_ACCESS_TOKEN}}``
+    when the user is signed in via OIDC). When the user is **not** signed in
+    via OIDC the literal placeholder is forwarded; we treat that as absent so
+    the legacy session lookup can take over.
+    """
+    if not raw or not raw.startswith("Bearer "):
+        return None
+    token = raw.removeprefix("Bearer ").strip()
+    if not token or token.startswith("{{"):
+        return None
+    return token
 
 
 def _lookup_session_token(session_id: str | None) -> str | None:

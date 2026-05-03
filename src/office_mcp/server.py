@@ -347,22 +347,25 @@ class UserContextMiddleware:
     header placeholders in chat mode (upstream bug #9910), so without this
     fallback the whole MCP surface is unreachable from a plain chat.
 
-    Also reads the ``Mcp-Session-Id`` transport header and, when the
-    :class:`~office_mcp.auth.store.TokenStore` has a token bound to that
-    session, stamps ``user_ctx.on_behalf_of_token`` so cloud backends
-    (Graph, future Drive) can act on the user's behalf without each
-    tool re-implementing the lookup. Phase 7c.
+    User-on-behalf-of token is resolved in this priority order:
+
+    1. ``X-User-Authorization: Bearer <token>`` — LibreChat (>= 0.8.5)
+       forwards the OIDC access token it obtained at SSO so office-mcp
+       can call Microsoft Graph as the signed-in user without its own
+       consent prompt. This is the production path: single sign-on.
+    2. ``Mcp-Session-Id`` lookup against :class:`~office_mcp.auth.store.TokenStore`
+       — the legacy custom OAuth flow (``/auth/login`` → ``/auth/callback``).
+       Kept as a fallback for dev/standalone deployments where LibreChat
+       isn't in front of office-mcp.
 
     Trust model
     -----------
-    ``Mcp-Session-Id`` is treated as a **capability**: any caller able to
-    present both a valid bearer (when ``OFFICE_MCP_TOKEN`` is set) and a
-    known session id is granted Graph access on behalf of the human
-    Microsoft user previously bound to that session via ``/auth/callback``.
-    The bearer + session-id combination is therefore the user-impersonation
-    boundary on this server — never log a session id at INFO level, never
-    accept session ids from sources other than the MCP transport header,
-    and rotate the bearer immediately if it ever leaks.
+    Both paths require a valid server bearer (``OFFICE_MCP_TOKEN``) at the
+    transport layer; that gates *who* can call the MCP. The user-level
+    token only authorises *which* user the call acts on behalf of.
+    Never log either token; treat ``X-User-Authorization`` and
+    ``Mcp-Session-Id`` as capabilities and rotate the server bearer
+    immediately if it ever leaks.
     """
 
     def __init__(self, app: ASGIApp, fallback_user_id: str = "demo-user") -> None:
@@ -379,7 +382,7 @@ class UserContextMiddleware:
         user_id = raw_user if _looks_like_real_id(raw_user) else self._fallback
         email = raw_email if _looks_like_real_id(raw_email) else None
 
-        access_token = _lookup_session_token(session_id)
+        access_token = _extract_user_bearer(scope) or _lookup_session_token(session_id)
 
         ctx = UserContext(
             user_id=user_id,
@@ -388,6 +391,23 @@ class UserContextMiddleware:
         )
         with bind_user(ctx), bind_mcp_session_id(session_id):
             await self.app(scope, receive, send)
+
+
+def _extract_user_bearer(scope: Scope) -> str | None:
+    """Return the access token forwarded by LibreChat, or ``None``.
+
+    LibreChat substitutes ``{{LIBRECHAT_OPENID_ACCESS_TOKEN}}`` only when
+    the user is signed in via OIDC; otherwise the literal placeholder is
+    forwarded and we ignore it (treat as absent → fallback to the session
+    lookup so dev with the custom OAuth flow keeps working).
+    """
+    raw = _header(scope, b"x-user-authorization")
+    if not raw or not raw.startswith("Bearer "):
+        return None
+    token = raw.removeprefix("Bearer ").strip()
+    if not token or token.startswith("{{"):
+        return None
+    return token
 
 
 def _lookup_session_token(session_id: str | None) -> str | None:
