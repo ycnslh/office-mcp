@@ -67,7 +67,9 @@ services:
       - OPENID_CLIENT_SECRET=${OPENID_CLIENT_SECRET}
       - OPENID_ISSUER=${OPENID_ISSUER}
       - OPENID_SESSION_SECRET=${OPENID_SESSION_SECRET}
-      - OPENID_SCOPE=${OPENID_SCOPE:-openid profile email}
+      - OPENID_SCOPE=${OPENID_SCOPE:-openid profile email offline_access}
+      - OPENID_REUSE_TOKENS=${OPENID_REUSE_TOKENS:-true}
+      - GRAPH_API_SCOPES=${GRAPH_API_SCOPES:-https://graph.microsoft.com/.default}
       - OPENID_CALLBACK_URL=${OPENID_CALLBACK_URL:-/oauth/openid/callback}
       - OPENID_BUTTON_LABEL=${OPENID_BUTTON_LABEL:-Continuer avec Microsoft}
     volumes:
