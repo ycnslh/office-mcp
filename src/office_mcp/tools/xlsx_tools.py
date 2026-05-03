@@ -13,7 +13,7 @@ from typing import Any
 from office_mcp.context import require_current_user
 from office_mcp.engines import xlsx_engine
 from office_mcp.instrumentation import register_tool
-from office_mcp.runtime import build_download_url, get_registry
+from office_mcp.runtime import download_url_for, get_registry
 
 
 async def xlsx_create(
@@ -35,7 +35,7 @@ async def xlsx_create(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "sheets": sheets or ["Sheet"],
         "summary": (
             f"Created workbook at {meta.uri} with sheets "
@@ -109,7 +109,7 @@ async def xlsx_write_range(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "summary": (
             f"Wrote {rows}×{cols} {style} block at {sheet}!{start_cell} in {meta.uri}"
         ),
@@ -146,7 +146,7 @@ async def xlsx_apply_formula(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "recalculated": recalc,
         "summary": (
             f"Set formula {formula!r} at {sheet}!{cell} in {meta.uri}"

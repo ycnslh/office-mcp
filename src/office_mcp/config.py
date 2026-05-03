@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # workflow (which sources them from GitHub Secrets) and in any local
     # `.env` produced by an Azure CLI helper.
 
+    od_default_folder: str = "AI Generated"
+    """Folder under the user's OneDrive root where ``od://`` writes land
+    when the URI carries no folder component (``od://foo.docx`` →
+    ``od://AI Generated/foo.docx``). Set to an empty string to disable
+    normalization and let bare-name writes land at the drive root."""
+
     azure_tenant_id: str | None = Field(default=None, validation_alias="AZURE_TENANT_ID")
     azure_client_id: str | None = Field(default=None, validation_alias="AZURE_CLIENT_ID")
     azure_client_secret: str | None = Field(

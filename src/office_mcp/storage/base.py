@@ -18,6 +18,11 @@ class FileMetadata:
     modified_at: str
     etag: str | None
     mime_type: str | None
+    web_url: str | None = None
+    """Native browser URL for the file in the backend's UI (e.g. OneDrive
+    web). ``None`` for backends that don't expose one (local). Tools that
+    surface a download/view link prefer this over the local signed URL
+    when present, so cloud-backed files open in their native viewer."""
 
 
 class StorageBackend(ABC):

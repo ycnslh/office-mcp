@@ -69,12 +69,19 @@ class GraphBackend(StorageBackend):
         *,
         client: httpx.AsyncClient | None = None,
         timeout: httpx.Timeout = _DEFAULT_TIMEOUT,
+        default_folder: str | None = None,
     ) -> None:
         # Tests inject a pre-configured client (e.g. with pytest-httpx
         # transport hooks). Production gets a default httpx instance
         # with sane connect / read / pool timeouts.
         self._client = client if client is not None else httpx.AsyncClient(timeout=timeout)
         self._owns_client = client is None
+        # When set, writes targeting the OneDrive root (``od://foo.docx``,
+        # no folder segment) get rewritten into ``od://<default>/foo.docx``
+        # so LLM-generated documents land in a predictable subfolder
+        # rather than at the user's drive root. Reads/lists/deletes
+        # respect the URI as-is — only the create/write path normalizes.
+        self._default_folder = (default_folder or "").strip("/") or None
 
     async def aclose(self) -> None:
         """Close the underlying HTTP client if we created it."""
@@ -126,13 +133,29 @@ class GraphBackend(StorageBackend):
         # Graph returns both ``eTag`` (item-wide, includes metadata changes)
         # and ``cTag`` (content-only). For optimistic concurrency on writes
         # we use eTag — that's what ``If-Match`` matches against.
+        web_url = item.get("webUrl")
         return FileMetadata(
             uri=uri,
             size_bytes=int(item.get("size", 0)),
             modified_at=str(item.get("lastModifiedDateTime", "")),
             etag=str(item.get("eTag")) if item.get("eTag") else None,
             mime_type=file_facet.get("mimeType"),
+            web_url=str(web_url) if web_url else None,
         )
+
+    def _normalize_write_uri(self, uri: str) -> str:
+        """Promote a root-level ``od://foo.ext`` URI into the default folder.
+
+        Only fires on URIs that have no path separator (i.e. the LLM
+        forgot to include a folder). Anything with an explicit folder
+        is passed through unchanged.
+        """
+        if not self._default_folder or not uri.startswith(f"{_SCHEME}://"):
+            return uri
+        raw = uri.removeprefix(f"{_SCHEME}://").lstrip("/")
+        if "/" in raw or not raw:
+            return uri
+        return f"{_SCHEME}://{self._default_folder}/{raw}"
 
     @staticmethod
     def _raise_for_status(response: httpx.Response, uri: str) -> None:
@@ -191,7 +214,14 @@ class GraphBackend(StorageBackend):
         # then size check. Keeps the error class surfaced for an
         # unauthenticated bad-URI call consistent across operations.
         token = self._require_token(user_ctx)
-        path = self._path_from_uri(uri)
+        effective_uri = self._normalize_write_uri(uri)
+        if effective_uri != uri:
+            log.info(
+                "graph.write.default_folder_applied",
+                requested_uri=uri,
+                effective_uri=effective_uri,
+            )
+        path = self._path_from_uri(effective_uri)
         if len(data) > _MAX_SIMPLE_PUT_BYTES:
             raise BackendUnavailableError(
                 f"file size {len(data)} exceeds simple-PUT cap "
@@ -207,12 +237,12 @@ class GraphBackend(StorageBackend):
         response = await self._retry_on_423(
             "PUT",
             url,
-            uri,
+            effective_uri,
             content=data,
             headers=headers,
         )
-        self._raise_for_status(response, uri)
-        return self._to_metadata(uri, response.json())
+        self._raise_for_status(response, effective_uri)
+        return self._to_metadata(effective_uri, response.json())
 
     async def _retry_on_423(
         self,
