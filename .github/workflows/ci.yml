@@ -112,22 +112,18 @@ jobs:
           OPENID_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
           OPENID_ISSUER=https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/v2.0
           OPENID_SESSION_SECRET=ef14744065e1a4fc0b01a45c5fb3475876a3faac9ea83964e5021dffa6d36c71
-          # Persist the OIDC tokenset on the user document so LibreChat can
-          # later exchange the access token for a Graph-audience token (OBO
-          # flow) when an MCP header carries {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}.
-          # Without this flag the openidTokens / federatedTokens fields are
-          # never written, the OBO resolver finds no source token, and the
-          # placeholder is forwarded literally — making MCP→Graph fail.
+          # Persist the OIDC tokenset on the session so LibreChat can substitute
+          # {{LIBRECHAT_OPENID_ACCESS_TOKEN}} into MCP headers at request time.
+          # Without this flag the openid_strategy never stores the tokenset and
+          # the placeholder is forwarded literally — making MCP→Graph fail.
           OPENID_REUSE_TOKENS=true
-          # OIDC sign-in scopes only — Graph scopes are requested at OBO
-          # exchange time, not at sign-in, so the original access token has
-          # aud=<app reg> (suitable for OBO) instead of aud=Graph (which
-          # would skip OBO and only expose Files.ReadWrite to LibreChat).
-          OPENID_SCOPE=openid profile email offline_access
-          # Scope requested during the OBO exchange. .default = all admin-
-          # consented Graph scopes for the app registration (today: Files.ReadWrite),
-          # which is exactly what GraphBackend needs against /me/drive/*.
-          GRAPH_API_SCOPES=https://graph.microsoft.com/.default
+          # Sign-in scopes include Files.ReadWrite so Azure issues an access
+          # token with aud=Graph + Files.ReadWrite directly — the token is
+          # usable as-is against /me/drive/*. This sidesteps the On-Behalf-Of
+          # flow: OBO would require the source token to have aud=<app reg>,
+          # which only happens if we expose a custom API scope on the app reg.
+          # offline_access enables silent refresh by LibreChat without re-prompt.
+          OPENID_SCOPE=openid profile email offline_access Files.ReadWrite
           OPENID_CALLBACK_URL=/oauth/openid/callback
           OPENID_BUTTON_LABEL=Continuer avec Microsoft
 

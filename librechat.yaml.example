@@ -36,12 +36,11 @@ mcpServers:
     headers:
       # Server-level bearer (auth between LibreChat and office-mcp itself).
       Authorization: "Bearer ${OFFICE_MCP_TOKEN}"
-      # User-level bearer: a Graph-audience access token, derived by LibreChat
-      # via the On-Behalf-Of flow from the user's OIDC sign-in token. We use
-      # the LIBRECHAT_GRAPH_ACCESS_TOKEN placeholder (not LIBRECHAT_OPENID_ACCESS_TOKEN)
-      # because the latter has aud=<app reg>, not aud=Graph — Graph would 401.
-      # OBO requires OPENID_REUSE_TOKENS=true on the LibreChat container.
-      X-User-Authorization: "Bearer {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}"
+      # User-level bearer: the OIDC access token LibreChat persisted at sign-in
+      # (OPENID_REUSE_TOKENS=true). Since OPENID_SCOPE includes Files.ReadWrite,
+      # Azure issues this token with aud=Graph + the Files.ReadWrite scope, so
+      # office-mcp can call /me/drive/* directly — no On-Behalf-Of exchange.
+      X-User-Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
       X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
       X-LibreChat-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
     serverInstructions: |
