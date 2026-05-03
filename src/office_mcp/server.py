@@ -476,7 +476,7 @@ def _bootstrap(settings: Settings) -> None:
         # Only register the Graph backend when Azure AD is wired —
         # otherwise `od://` URIs raise UnknownSchemeError, which is
         # the right signal in dev where creds are absent.
-        registry.register(GraphBackend())
+        registry.register(GraphBackend(default_folder=settings.od_default_folder))
     set_registry(registry)
 
     set_token_store(TokenStore())

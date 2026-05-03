@@ -338,6 +338,116 @@ async def test_write_encodes_path_segments(
     # have raised; reaching here is the assertion.
 
 
+# ── default-folder normalization (writes only) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_write_rewrites_bare_uri_into_default_folder(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """``od://foo.docx`` (no folder) lands under the configured default
+    folder rather than at the OneDrive root, so LLM-generated files end
+    up in a predictable place."""
+    backend = GraphBackend(default_folder="AI Generated")
+    try:
+        httpx_mock.add_response(
+            url=f"{_GRAPH_BASE}/me/drive/root:/AI%20Generated/foo.docx:/content",
+            method="PUT",
+            json={
+                "size": 1,
+                "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+                "eTag": '"e"',
+                "file": {"mimeType": "application/octet-stream"},
+                "webUrl": "https://example-my.sharepoint.com/personal/foo.docx",
+            },
+        )
+
+        meta = await backend.write(
+            "od://foo.docx", b"x", user_ctx=_user("AT")
+        )
+
+        assert meta.uri == "od://AI Generated/foo.docx"
+        assert meta.web_url == "https://example-my.sharepoint.com/personal/foo.docx"
+    finally:
+        await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_write_passes_explicit_folder_through_unchanged(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """A URI with an explicit folder must not be rewritten — only bare
+    names trigger normalization."""
+    backend = GraphBackend(default_folder="AI Generated")
+    try:
+        httpx_mock.add_response(
+            url=f"{_GRAPH_BASE}/me/drive/root:/Documents/q3.docx:/content",
+            method="PUT",
+            json={
+                "size": 1,
+                "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+                "eTag": '"e"',
+                "file": {"mimeType": "application/octet-stream"},
+            },
+        )
+
+        meta = await backend.write(
+            "od://Documents/q3.docx", b"x", user_ctx=_user("AT")
+        )
+
+        assert meta.uri == "od://Documents/q3.docx"
+    finally:
+        await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_write_default_folder_disabled_keeps_root_writes(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Operators can opt out by passing an empty default_folder."""
+    backend = GraphBackend(default_folder="")
+    try:
+        httpx_mock.add_response(
+            url=f"{_GRAPH_BASE}/me/drive/root:/foo.docx:/content",
+            method="PUT",
+            json={
+                "size": 1,
+                "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+                "eTag": '"e"',
+                "file": {"mimeType": "application/octet-stream"},
+            },
+        )
+
+        meta = await backend.write(
+            "od://foo.docx", b"x", user_ctx=_user("AT")
+        )
+
+        assert meta.uri == "od://foo.docx"
+    finally:
+        await backend.aclose()
+
+
+@pytest.mark.asyncio
+async def test_write_captures_web_url_when_present(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+            "eTag": '"e"',
+            "file": {"mimeType": "application/octet-stream"},
+            "webUrl": "https://example-my.sharepoint.com/personal/q.docx",
+        },
+    )
+
+    meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    assert meta.web_url == "https://example-my.sharepoint.com/personal/q.docx"
+
+
 # ── stat ───────────────────────────────────────────────────────────────
 
 

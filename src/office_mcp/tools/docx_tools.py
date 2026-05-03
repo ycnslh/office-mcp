@@ -22,7 +22,7 @@ from typing import Any
 from office_mcp.context import require_current_user
 from office_mcp.engines import docx_engine
 from office_mcp.instrumentation import register_tool
-from office_mcp.runtime import build_download_url, get_registry
+from office_mcp.runtime import download_url_for, get_registry
 from office_mcp.utils import libreoffice
 
 
@@ -64,7 +64,7 @@ async def docx_create(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "summary": (
             f"Created document at {meta.uri}"
             + (f" with title {title!r}" if title else "")
@@ -121,7 +121,7 @@ async def docx_append(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "summary": f"Appended {len(blocks)} block(s) to {meta.uri}",
     }
 
@@ -151,7 +151,7 @@ async def docx_replace(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "replacements_made": count,
         "summary": (
             f"Applied {len(replacements)} replacement rule(s), "
@@ -186,7 +186,7 @@ async def docx_remove(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "sections_removed": removed,
         "summary": (
             f"Removed {removed}/{len(headings)} section(s) from {meta.uri}"
@@ -225,7 +225,7 @@ async def docx_to_pdf(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": build_download_url(meta.uri, user.user_id),
+        "download_url": download_url_for(meta, user.user_id),
         "summary": (
             f"Rendered {file_uri} → {meta.uri} ({meta.size_bytes} bytes)"
         ),

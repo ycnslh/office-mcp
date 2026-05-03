@@ -13,6 +13,7 @@ from fastmcp import FastMCP
 from office_mcp.auth import OAuthClient, TokenStore
 from office_mcp.config import Settings
 from office_mcp.storage import StorageRegistry
+from office_mcp.storage.base import FileMetadata
 from office_mcp.utils import signing
 
 _INSTRUCTIONS = """\
@@ -32,6 +33,12 @@ ADDRESSING FILES
   Path components are scoped per user, so a leading `/` is unnecessary.
   Examples: `local://reports/q3.docx`, `od://Documents/q3.docx`.
 
+  For OneDrive: writes that omit a folder (e.g. `od://q3.docx`) are
+  rewritten by the server into a default subfolder (configurable, by
+  default `od://AI Generated/q3.docx`) so generated files land in a
+  predictable location. The response always carries the canonical
+  `file_uri` — use it verbatim for any follow-up call.
+
 AUTHENTICATION FOR od://
   The first tool call that touches `od://` in a fresh chat returns
   `{"auth_required": true, "login_url": "...", "summary": "..."}`
@@ -49,9 +56,12 @@ WORKFLOW
      resource (docx, xlsx, pptx) for formatting conventions.
   2. Compose the document with the granular tools (create → write/append →
      read to verify).
-  3. Every mutating tool on `local://` returns a `download_url` — render
-     it as a Markdown link in your answer so the user can click to
-     download the file directly from the conversation. Example:
+  3. Every mutating tool returns a `download_url` — render it as a
+     Markdown link in your answer so the user can click directly from
+     the conversation. The URL points to the file's *native* viewer
+     when applicable: OneDrive web for `od://` (the user opens the
+     file in their Microsoft account), the server's signed `/files/`
+     endpoint for `local://`. Example:
        `→ [q3.docx](https://office-mcp.reho.dev/files/...)`
   4. Always echo the resulting `file_uri` alongside the download link.
 
@@ -131,6 +141,20 @@ def get_token_store() -> TokenStore:
 def set_token_store(store: TokenStore | None) -> None:
     global _token_store
     _token_store = store
+
+
+def download_url_for(meta: FileMetadata, user_id: str) -> str | None:
+    """Return the user-facing URL for a file, preferring its native viewer.
+
+    For backends that surface a browser URL (``meta.web_url`` — e.g.
+    OneDrive's ``webUrl``), that is returned as-is so the user lands in
+    the file's native viewer with their existing session. For backends
+    without one (``local://``), falls back to a signed ``/files/{token}``
+    URL via :func:`build_download_url`.
+    """
+    if meta.web_url:
+        return meta.web_url
+    return build_download_url(meta.uri, user_id)
 
 
 def build_download_url(uri: str, user_id: str) -> str | None:
