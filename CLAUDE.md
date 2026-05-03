@@ -117,18 +117,22 @@ Chaque backend implémente `StorageBackend` (voir §5).
 
 Convention : `<format>_<action>` (ex: `docx_create`). Les outils retournent toujours un dict structuré avec `file_uri`, `size_bytes`, et un `summary` textuel.
 
-### Docx (8 outils)
+### Docx (6 outils, batched-by-intent)
+
+Chaque tool est conçu pour faire **toute son intention en un seul appel**
+afin que l'LLM ne chaîne plus de séquences `create + N×append + M×insert`.
 
 | Tool | Description |
 |---|---|
-| `docx_create` | Crée un docx vide ou depuis un template, avec titre, styles, page size, marges |
-| `docx_read` | Extrait texte + structure (headings, tables, images) en markdown |
-| `docx_append_section` | Ajoute un heading + paragraphs à la fin |
-| `docx_insert_table` | Insère un tableau (données + header, avec doubles widths appliquées) |
-| `docx_insert_image` | Insère une image (depuis file_uri ou base64), avec taille en inches |
-| `docx_replace_text` | Find-and-replace (regex ou literal), retourne le nb d'occurrences |
-| `docx_apply_template` | Remplit un template `.docx` avec placeholders `{{var}}` |
+| `docx_create` | Crée un docx complet en un appel : titre + `blocks` (liste ordonnée de `heading`/`paragraph`/`table`) |
+| `docx_read` | Extrait texte + structure (headings, tables) en JSON LLM-friendly |
+| `docx_append` | Ajoute N blocs à la fin d'un doc existant en un appel |
+| `docx_replace` | Applique N find/replace (literal ou regex) en une passe, retourne le compte |
+| `docx_remove` | Supprime N sections (par texte de heading), retourne le compte |
 | `docx_to_pdf` | Convertit en PDF via LibreOffice headless |
+
+> Pas de `docx_delete` (côté MCP) : supprimer le fichier passe par `fs_delete`,
+> qui couvre tous les backends storage de manière cohérente.
 
 ### Xlsx (7 outils)
 
@@ -161,7 +165,7 @@ Convention : `<format>_<action>` (ex: `docx_create`). Les outils retournent touj
 | `fs_copy` | Copie entre backends (ex: `local://` → `sp://`) |
 | `fs_delete` | Supprime un fichier |
 
-**Total : 24 outils.** C'est dense mais cohérent. Pour la V1 de démo, on peut ne livrer que 12 outils (docx_create, docx_read, docx_append_section, docx_insert_table, xlsx_create, xlsx_write_range, xlsx_apply_formula, pptx_create, pptx_add_slide, fs_list, fs_copy, docx_to_pdf) et ajouter les autres en V2.
+**Total cible : ~22 outils** (la doctrine "batched-by-intent" sur docx fait passer 8 tools envisagés à 6 sans perdre d'usage). Pour la V1 de démo, livrer 12 outils suffit (docx_create, docx_read, xlsx_create, xlsx_write_range, xlsx_apply_formula, pptx_create, pptx_add_slide, fs_list, fs_copy, docx_to_pdf, docx_append, docx_replace) et ajouter les autres en V2.
 
 ### Ressources MCP (pas des tools, à servir par le server)
 
@@ -470,7 +474,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 ### Phase 3 — Docx engine + 4 tools de base (2h)
 
 - `docx_engine.py` : wrapper `python-docx` avec application automatique des règles (police Arial, marges 1", heading styles, tables en DXA double width, etc.).
-- Tools : `docx_create`, `docx_read`, `docx_append_section`, `docx_insert_table`.
+- Tools : `docx_create` (avec `blocks` batché), `docx_read`, `docx_append`, `docx_replace`, `docx_remove`.
 - Ressource MCP `office://rules/docx` qui sert `docx_rules.md` (reprise adaptée du skill Anthropic).
 - Tests : create → read → assert contenu, insert table → assert double widths présentes.
 - Commit : `feat(docx): add docx engine and 4 core tools with formatting rules`.

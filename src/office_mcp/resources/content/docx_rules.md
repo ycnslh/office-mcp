@@ -37,8 +37,8 @@ should ask the tool to do.
 ## Tables
 
 - **Always** set explicit column widths in DXA (1/20 of a point). The
-  `docx_insert_table` tool does this automatically: total 9360 DXA =
-  6.5" usable width (fits A4 with 1" margins).
+  table block (`{"type": "table", ...}`) does this automatically: total
+  9360 DXA = 6.5" usable width (fits A4 with 1" margins).
 - Distribute columns evenly unless the data genuinely asks for asymmetry.
 - Bold the header row. Use a subtle border style (the engine defaults to
   "Light Grid Accent 1").
@@ -55,8 +55,23 @@ should ask the tool to do.
   `Emphasis`) or a highlight.
 - Multiple consecutive blank lines to fake spacing.
 
+## How to call the tools
+
+- **Create the entire document in one `docx_create` call.** Pass the
+  full body as a `blocks` list (headings + paragraphs + tables in
+  order). Do not chain a `docx_create` followed by sequential
+  `docx_append` calls when you already know the full content — it is
+  slower and offers no benefit.
+- **Editing existing documents is also batched.** Use a single
+  `docx_append` (one call, many blocks), `docx_replace` (one call, many
+  substitutions) or `docx_remove` (one call, many headings to drop).
+- **Block schema** — every block carries a `type` field:
+  - `{"type": "heading", "level": 1, "text": "..."}` (`level` ∈ 1..3)
+  - `{"type": "paragraph", "text": "..."}`
+  - `{"type": "table", "headers": [...], "rows": [[...]]}`
+
 ## When in doubt
 
 Use a template. Call the `office://templates/list` resource (V2) to see
-what is available; when nothing fits, fall back to `docx_create` and build
-the document section by section.
+what is available; when nothing fits, fall back to a single `docx_create`
+with a complete `blocks` list.
