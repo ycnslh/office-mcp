@@ -48,7 +48,16 @@ mcpServers:
       Workflow rules:
         1. Before creating a document, read office://rules/<format> for formatting conventions.
         2. Files are addressed by URI. The default scheme is `od://` (the user's OneDrive,
-           reached transparently via SSO — no consent prompt needed). Example:
-           `od://Documents/reports/q3.docx`. The `local://` scheme is also available
-           for ephemeral files; `s3://`, `az://`, `sp://` are not wired yet.
-        3. Always echo the resulting file_uri to the user so they can retrieve it.
+           reached transparently via SSO — no consent prompt needed). When the user does
+           not specify a folder, save under `od://AI Generated/<name>` so generated files
+           cluster in one place. Example: `od://AI Generated/q3.docx`. The `local://`
+           scheme is also available for ephemeral files; `s3://`, `az://`, `sp://` are
+           not wired yet.
+        3. Do NOT call `fs_list` or `fs_stat` to "scope" OneDrive or "check if a file
+           exists" before a `*_create` call — create tools handle auth, overwrite, and
+           folder normalization on their own. Go straight to the create tool with your
+           chosen `file_uri`.
+        4. Build the entire document body in a single create call (pass the full content
+           via the create tool's batched argument — e.g. `blocks` for `docx_create`).
+           Do not chain create + multiple appends when you already know the content.
+        5. Always echo the resulting file_uri to the user so they can retrieve it.
