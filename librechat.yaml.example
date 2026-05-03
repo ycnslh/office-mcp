@@ -36,10 +36,12 @@ mcpServers:
     headers:
       # Server-level bearer (auth between LibreChat and office-mcp itself).
       Authorization: "Bearer ${OFFICE_MCP_TOKEN}"
-      # User-level bearer: the OIDC access token LibreChat obtained at SSO,
-      # forwarded as-is. office-mcp uses it directly with Microsoft Graph,
-      # so the user never sees a second consent prompt — single sign-on.
-      X-User-Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
+      # User-level bearer: a Graph-audience access token, derived by LibreChat
+      # via the On-Behalf-Of flow from the user's OIDC sign-in token. We use
+      # the LIBRECHAT_GRAPH_ACCESS_TOKEN placeholder (not LIBRECHAT_OPENID_ACCESS_TOKEN)
+      # because the latter has aud=<app reg>, not aud=Graph — Graph would 401.
+      # OBO requires OPENID_REUSE_TOKENS=true on the LibreChat container.
+      X-User-Authorization: "Bearer {{LIBRECHAT_GRAPH_ACCESS_TOKEN}}"
       X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
       X-LibreChat-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
     serverInstructions: |
