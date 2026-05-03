@@ -103,6 +103,19 @@ jobs:
           JWT_SECRET=52da6a0d900a72c69160eb5aea07ab281b8bafe1c70666df9d2ef98e47f2468a
           JWT_REFRESH_SECRET=7f28eff69e733ba749187aae5be8cd579da45967dbb3ddd19d057eca36d66a6c
 
+          # LibreChat OIDC (Azure AD SSO) — reuses the office-mcp app registration.
+          # Local email/password registration is OFF: every user must enter via SSO.
+          ALLOW_REGISTRATION=false
+          ALLOW_SOCIAL_LOGIN=true
+          ALLOW_SOCIAL_REGISTRATION=true
+          OPENID_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}
+          OPENID_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
+          OPENID_ISSUER=https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/v2.0
+          OPENID_SESSION_SECRET=ef14744065e1a4fc0b01a45c5fb3475876a3faac9ea83964e5021dffa6d36c71
+          OPENID_SCOPE=openid profile email
+          OPENID_CALLBACK_URL=/oauth/openid/callback
+          OPENID_BUTTON_LABEL=Continuer avec Microsoft
+
           # MiniMax LLM — only real secret, injected from GitHub
           MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }}
           MINIMAX_BASE_URL=https://api.minimax.io/v1
