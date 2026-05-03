@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     public_base_url: str | None = None
     """Externally-reachable HTTPS base URL of this server, used to build
     OAuth ``redirect_uri`` values registered with Azure AD. Example:
-    ``https://office-mcp.h.reho.dev``. Required for the OAuth flow; when
+    ``https://office-mcp.reho.dev``. Required for the OAuth flow; when
     unset the ``/auth/*`` endpoints return 503."""
 
     # ── Azure AD / Microsoft Graph (delegated OAuth → user OneDrive) ─────

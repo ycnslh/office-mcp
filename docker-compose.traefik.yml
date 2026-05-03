@@ -10,7 +10,7 @@
 # Requires:
 #   - a running Traefik watching the `proxy-network`
 #   - a `letsencrypt` certResolver configured on Traefik
-#   - DNS for `office-mcp.h.reho.dev` pointing to the host
+#   - DNS for `office-mcp.reho.dev` pointing to the host
 # ─────────────────────────────────────────────────────────────────────
 
 services:
@@ -21,7 +21,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy-network"
-      - "traefik.http.routers.office-mcp.rule=Host(`office-mcp.h.reho.dev`)"
+      - "traefik.http.routers.office-mcp.rule=Host(`office-mcp.reho.dev`)"
       - "traefik.http.routers.office-mcp.entrypoints=websecure"
       - "traefik.http.routers.office-mcp.tls.certresolver=letsencrypt"
       - "traefik.http.services.office-mcp.loadbalancer.server.port=8080"
