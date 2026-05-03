@@ -112,11 +112,14 @@ jobs:
           OPENID_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
           OPENID_ISSUER=https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/v2.0
           OPENID_SESSION_SECRET=ef14744065e1a4fc0b01a45c5fb3475876a3faac9ea83964e5021dffa6d36c71
-          # Graph delegated scopes (Files.ReadWrite.All Sites.ReadWrite.All) are
-          # requested at sign-in so Azure issues an access token with aud=Graph,
-          # which LibreChat forwards as-is to office-mcp via the MCP header below.
+          # Graph delegated scope (Files.ReadWrite) is requested at sign-in so
+          # Azure issues an access token with aud=Graph, which LibreChat forwards
+          # as-is to office-mcp via the MCP header below. We use the non-".All"
+          # variant: GraphBackend only hits /me/drive/* (the signed-in user's own
+          # OneDrive), so the broader Files.ReadWrite.All / Sites.ReadWrite.All
+          # would just inflate the consent surface for no benefit.
           # offline_access enables silent refresh by LibreChat without re-prompt.
-          OPENID_SCOPE=openid profile email offline_access Files.ReadWrite.All Sites.ReadWrite.All
+          OPENID_SCOPE=openid profile email offline_access Files.ReadWrite
           OPENID_CALLBACK_URL=/oauth/openid/callback
           OPENID_BUTTON_LABEL=Continuer avec Microsoft
 
