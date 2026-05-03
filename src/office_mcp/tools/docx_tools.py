@@ -33,6 +33,12 @@ async def docx_create(
 ) -> dict[str, Any]:
     """Create a complete Word document in a single call.
 
+    Use this directly. Do not call ``fs_list``, ``fs_stat`` or any other
+    tool to "check OneDrive" or "see if the file exists" first — this
+    tool creates or overwrites at ``file_uri`` in one step, surfaces
+    ``auth_required`` on the first OneDrive touch the same way a list
+    would, and normalizes bare-name URIs server-side.
+
     Pass the entire document body as ``blocks`` — an ordered list of typed
     content blocks — and this one call writes the finished file. Do not
     follow up with separate append/insert calls; everything fits here.
