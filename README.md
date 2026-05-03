@@ -12,7 +12,7 @@ pending client validation).
 
 ## Status — Phase 9 (LibreChat integration)
 
-**16 tools** across four groups (docx, xlsx, pptx, fs) exposed over
+**17 tools** across four groups (docx, xlsx, pptx, fs) exposed over
 streamable-http at `/mcp`, plus **3 formatting-rules resources**
 (`office://rules/{docx,xlsx,pptx}`). Every mutating tool returns a
 signed `download_url`, so files generated in chat are one click away
@@ -21,7 +21,7 @@ LibreChat's storage.
 
 | Group | Tools |
 |---|---|
-| Word  | `docx_create` / `docx_read` / `docx_append_section` / `docx_insert_table` / `docx_to_pdf` |
+| Word  | `docx_create` / `docx_read` / `docx_append` / `docx_replace` / `docx_remove` / `docx_to_pdf` |
 | Excel | `xlsx_create` / `xlsx_read_range` / `xlsx_write_range` / `xlsx_apply_formula` |
 | PowerPoint | `pptx_create` / `pptx_add_slide` / `pptx_read` |
 | Filesystem | `fs_list` / `fs_stat` / `fs_copy` / `fs_delete` |

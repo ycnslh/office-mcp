@@ -1,4 +1,4 @@
-"""Integration tests for the 4 core docx tools.
+"""Integration tests for the docx tools.
 
 Tools are invoked directly (they remain plain callables after the
 ``@mcp.tool`` decorator) with a test-scoped registry and user binding.
@@ -16,10 +16,11 @@ from office_mcp.runtime import set_registry
 from office_mcp.storage import LocalBackend, StorageRegistry
 from office_mcp.tools.docx_tools import (
     _swap_extension,
-    docx_append_section,
+    docx_append,
     docx_create,
-    docx_insert_table,
     docx_read,
+    docx_remove,
+    docx_replace,
     docx_to_pdf,
 )
 from office_mcp.utils import libreoffice
@@ -59,6 +60,35 @@ async def test_docx_create_writes_to_storage_backend(
 
 
 @pytest.mark.asyncio
+async def test_docx_create_with_blocks_produces_full_document(
+    registry: StorageRegistry, yacine: UserContext
+) -> None:
+    result = await docx_create(
+        "local://full.docx",
+        title="Histoire du Dragon",
+        blocks=[
+            {"type": "heading", "level": 1, "text": "Le Dernier Dragon"},
+            {"type": "paragraph", "text": "Pyralis vivait depuis…"},
+            {"type": "heading", "level": 1, "text": "La Rencontre"},
+            {"type": "paragraph", "text": "Élina arriva un soir d'orage."},
+            {
+                "type": "table",
+                "headers": ["Personnage", "Rôle"],
+                "rows": [["Pyralis", "Dragon"], ["Élina", "Héroïne"]],
+            },
+        ],
+    )
+
+    assert "5 block(s)" in result["summary"]
+    payload = await docx_read("local://full.docx")
+    texts = [p["text"] for p in payload["paragraphs"]]
+    assert "Le Dernier Dragon" in texts
+    assert "La Rencontre" in texts
+    assert payload["table_count"] == 1
+    assert payload["tables"][0][1] == ["Pyralis", "Dragon"]
+
+
+@pytest.mark.asyncio
 async def test_docx_create_then_read_roundtrip(
     registry: StorageRegistry, yacine: UserContext
 ) -> None:
@@ -71,44 +101,87 @@ async def test_docx_create_then_read_roundtrip(
 
 
 @pytest.mark.asyncio
-async def test_docx_append_section_persists(
+async def test_docx_append_persists_multiple_blocks(
     registry: StorageRegistry, yacine: UserContext
 ) -> None:
     await docx_create("local://doc.docx", title="Doc")
 
-    first = await docx_append_section(
+    result = await docx_append(
         "local://doc.docx",
-        heading="Intro",
-        paragraphs=["lead paragraph", "supporting detail"],
-        level=1,
+        blocks=[
+            {"type": "heading", "level": 1, "text": "Intro"},
+            {"type": "paragraph", "text": "lead paragraph"},
+            {"type": "paragraph", "text": "supporting detail"},
+            {
+                "type": "table",
+                "headers": ["Product", "Units"],
+                "rows": [["Alpha", "12"]],
+            },
+        ],
     )
-    assert "Intro" in first["summary"]
-    assert "2 paragraphs" in first["summary"]
+    assert "4 block(s)" in result["summary"]
 
     after = await docx_read("local://doc.docx")
     texts = [p["text"] for p in after["paragraphs"]]
     assert "Intro" in texts
     assert "lead paragraph" in texts
-    assert "supporting detail" in texts
+    assert after["table_count"] == 1
+    assert after["tables"][0][0] == ["Product", "Units"]
 
 
 @pytest.mark.asyncio
-async def test_docx_insert_table_persists(
+async def test_docx_replace_substitutes_and_returns_count(
     registry: StorageRegistry, yacine: UserContext
 ) -> None:
-    await docx_create("local://table.docx")
-
-    result = await docx_insert_table(
-        "local://table.docx",
-        headers=["Product", "Units", "Revenue"],
-        rows=[["Alpha", "12", "1200"], ["Beta", "7", "910"]],
+    await docx_create(
+        "local://template.docx",
+        title="Hello {name}",
+        blocks=[
+            {"type": "paragraph", "text": "Dear {name}, your code is {code}."},
+        ],
     )
-    assert "2×3 table" in result["summary"]
 
-    after = await docx_read("local://table.docx")
-    assert after["table_count"] == 1
-    assert after["tables"][0][0] == ["Product", "Units", "Revenue"]
-    assert after["tables"][0][1] == ["Alpha", "12", "1200"]
+    result = await docx_replace(
+        "local://template.docx",
+        replacements=[
+            {"find": "{name}", "replace": "Yacine"},
+            {"find": "{code}", "replace": "42"},
+        ],
+    )
+
+    assert result["replacements_made"] == 3  # title + paragraph (×2 placeholders)
+    after = await docx_read("local://template.docx")
+    flat = " | ".join(p["text"] for p in after["paragraphs"])
+    assert "Yacine" in flat
+    assert "{name}" not in flat
+    assert "42" in flat
+
+
+@pytest.mark.asyncio
+async def test_docx_remove_drops_targeted_section(
+    registry: StorageRegistry, yacine: UserContext
+) -> None:
+    await docx_create(
+        "local://multi.docx",
+        title="Doc",
+        blocks=[
+            {"type": "heading", "level": 1, "text": "Keep"},
+            {"type": "paragraph", "text": "kept body"},
+            {"type": "heading", "level": 1, "text": "Drop"},
+            {"type": "paragraph", "text": "dropped body"},
+            {"type": "heading", "level": 1, "text": "Also kept"},
+        ],
+    )
+
+    result = await docx_remove("local://multi.docx", headings=["Drop"])
+
+    assert result["sections_removed"] == 1
+    after = await docx_read("local://multi.docx")
+    texts = [p["text"] for p in after["paragraphs"]]
+    assert "Keep" in texts
+    assert "Drop" not in texts
+    assert "dropped body" not in texts
+    assert "Also kept" in texts
 
 
 @pytest.mark.asyncio
@@ -135,11 +208,13 @@ def test_swap_extension(uri: str, expected: str) -> None:
 async def test_docx_to_pdf_writes_valid_pdf(
     registry: StorageRegistry, tmp_path: Path, yacine: UserContext
 ) -> None:
-    await docx_create("local://reports/q3.docx", title="Q3 report")
-    await docx_append_section(
+    await docx_create(
         "local://reports/q3.docx",
-        heading="Intro",
-        paragraphs=["Quarterly highlights."],
+        title="Q3 report",
+        blocks=[
+            {"type": "heading", "level": 1, "text": "Intro"},
+            {"type": "paragraph", "text": "Quarterly highlights."},
+        ],
     )
 
     result = await docx_to_pdf("local://reports/q3.docx")

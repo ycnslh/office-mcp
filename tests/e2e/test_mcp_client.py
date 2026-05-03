@@ -87,8 +87,9 @@ async def test_mcp_initialize_and_list_tools(running_server: str) -> None:
         assert {
             "docx_create",
             "docx_read",
-            "docx_append_section",
-            "docx_insert_table",
+            "docx_append",
+            "docx_replace",
+            "docx_remove",
             "docx_to_pdf",
             "xlsx_create",
             "xlsx_read_range",

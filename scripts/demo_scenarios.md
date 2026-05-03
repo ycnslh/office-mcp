@@ -28,11 +28,11 @@ created → clickable download in the conversation).
 **What the LLM should do:**
 
 1. `office://rules/docx` resource read.
-2. `docx_create(file_uri="local://demos/q3-report.docx", title="Rapport Q3 2026")`.
-3. Three `docx_append_section` calls.
-4. One `docx_insert_table` with 3 data rows.
-5. `docx_to_pdf("local://demos/q3-report.docx")`.
-6. Reply with two Markdown links (docx + pdf).
+2. **One** `docx_create` call with `title="Rapport Q3 2026"` and a
+   `blocks` list covering the three sections + the Région/Revenu/QoQ
+   table — the entire document body in a single round-trip.
+3. `docx_to_pdf("local://demos/q3-report.docx")`.
+4. Reply with two Markdown links (docx + pdf).
 
 **Why it lands:**
 

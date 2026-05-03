@@ -76,7 +76,7 @@ curl http://localhost:18080/health
 
 In LibreChat's UI, open a new chat, click the MCP menu. You should see
 **Office Documents** listed as connected (a small green dot). The LLM
-now has access to the 16 tools and 3 rules resources.
+now has access to the 17 tools and 3 rules resources.
 
 ## 5. Known LibreChat 0.8.4 limitations
 
