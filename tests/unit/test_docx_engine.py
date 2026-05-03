@@ -28,7 +28,7 @@ def test_compose_with_title_renders_as_word_title_style() -> None:
     title_paragraphs = [
         p for p in doc.paragraphs if p.style and "Title" in (p.style.name or "")
     ]
-    assert any("Quarterly report" == p.text for p in title_paragraphs)
+    assert any(p.text == "Quarterly report" for p in title_paragraphs)
 
 
 def test_compose_applies_default_font() -> None:
