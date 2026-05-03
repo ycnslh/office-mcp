@@ -19,6 +19,12 @@ from office_mcp.runtime import download_url_for, get_registry
 async def fs_list(uri_prefix: str) -> dict[str, Any]:
     """List files under a URI prefix.
 
+    Call this only when the user explicitly asks to see folder contents,
+    or when you need to find an existing file to edit. Do NOT use it as
+    a "scope" or "check existence" probe before a ``*_create`` call —
+    create tools handle auth and overwrite on their own, so the list
+    pre-call only adds latency.
+
     Pick the scheme from the user's intent — never default silently:
 
     * ``od://`` — the user's Microsoft OneDrive. Use whenever they say
@@ -57,7 +63,12 @@ async def fs_list(uri_prefix: str) -> dict[str, Any]:
 async def fs_stat(file_uri: str) -> dict[str, Any]:
     """Return metadata (size, mtime, etag, mime) for a single file.
 
-    ``file_uri`` carries the storage scheme — ``od://Documents/q3.docx``
+    Use this when you need the size or etag of an existing file. Do NOT
+    use it to "check if a file exists" before a ``*_create`` call —
+    create tools overwrite by design, so the stat pre-call adds latency
+    for nothing.
+
+    ``file_uri`` carries the storage scheme — ``od://AI Generated/q3.docx``
     for OneDrive, ``local://reports/q3.docx`` for the server scratch
     space. ``od://`` may return an ``auth_required`` payload on first
     call; surface the login URL and retry.

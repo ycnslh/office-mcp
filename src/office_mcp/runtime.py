@@ -31,13 +31,28 @@ ADDRESSING FILES
                     "my files in the cloud", or asks to save somewhere
                     they can open from their Microsoft account.
   Path components are scoped per user, so a leading `/` is unnecessary.
-  Examples: `local://reports/q3.docx`, `od://Documents/q3.docx`.
+  Examples: `local://reports/q3.docx`, `od://AI Generated/q3.docx`.
 
-  For OneDrive: writes that omit a folder (e.g. `od://q3.docx`) are
-  rewritten by the server into a default subfolder (configurable, by
-  default `od://AI Generated/q3.docx`) so generated files land in a
-  predictable location. The response always carries the canonical
+  For OneDrive: when the user does not specify a folder, default to
+  `od://AI Generated/<name>` so generated files cluster in one place.
+  Bare names (`od://q3.docx`, no folder) are rewritten server-side to
+  the same `AI Generated/` subfolder; the response carries the canonical
   `file_uri` — use it verbatim for any follow-up call.
+
+DO NOT EXPLORE FIRST
+  Never call `fs_list` or `fs_stat` to "scope" OneDrive, "check if a
+  file already exists", or "verify access" before a `*_create`. These
+  calls add latency and tokens for nothing. Go straight to the create
+  tool with your chosen `file_uri`:
+
+    - Auth: the create call surfaces `auth_required` exactly the same
+      way `fs_list` would, so you do not need a probe.
+    - Folder normalization: the server rewrites bare-name OneDrive
+      writes into a default folder automatically.
+    - Existence: create tools overwrite by design — no need to pre-check.
+
+  Use `fs_list` ONLY when the user explicitly asks to see what is in
+  a folder, or when an edit tool needs to find an existing file.
 
 AUTHENTICATION FOR od://
   The first tool call that touches `od://` in a fresh chat returns
@@ -54,8 +69,10 @@ AUTHENTICATION FOR od://
 WORKFLOW
   1. Before creating a document, consult the matching `office://rules/<format>`
      resource (docx, xlsx, pptx) for formatting conventions.
-  2. Compose the document with the granular tools (create → write/append →
-     read to verify).
+  2. Build the entire document body in a single create call (pass the
+     full content as the create tool's batched argument — e.g. `blocks`
+     for `docx_create`). Do not chain a create + multiple appends when
+     you already know the content.
   3. Every mutating tool returns a `download_url` — render it as a
      Markdown link in your answer so the user can click directly from
      the conversation. The URL points to the file's *native* viewer
