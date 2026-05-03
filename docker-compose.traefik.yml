@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────
-# Optional override — exposes office-mcp via an existing Traefik
-# instance on the host (used by the pixel deployment).
+# Optional override — exposes office-mcp + LibreChat via an existing
+# Traefik instance on the host (used by the pixel deployment).
 #
 # Append it to the compose command:
 #   docker compose -f docker-compose.yml \
@@ -10,7 +10,8 @@
 # Requires:
 #   - a running Traefik watching the `proxy-network`
 #   - a `letsencrypt` certResolver configured on Traefik
-#   - DNS for `office-mcp.h.reho.dev` pointing to the host
+#   - DNS for `office-mcp.reho.dev` and `librechat.reho.dev` pointing
+#     to the host
 # ─────────────────────────────────────────────────────────────────────
 
 services:
@@ -21,10 +22,31 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy-network"
-      - "traefik.http.routers.office-mcp.rule=Host(`office-mcp.h.reho.dev`)"
+      - "traefik.http.routers.office-mcp.rule=Host(`office-mcp.reho.dev`)"
       - "traefik.http.routers.office-mcp.entrypoints=websecure"
       - "traefik.http.routers.office-mcp.tls.certresolver=letsencrypt"
       - "traefik.http.services.office-mcp.loadbalancer.server.port=8080"
+
+  librechat:
+    networks:
+      - office-mcp
+      - proxy-network
+    # DOMAIN_CLIENT / DOMAIN_SERVER tell the LibreChat front-end and
+    # API which absolute URL to use in links, OAuth callbacks and
+    # cookies. Without these the browser would receive
+    # ``http://localhost:3080`` URLs from a backend it reached over
+    # ``https://librechat.reho.dev`` and the session would silently
+    # break. Override values picked up by docker-compose.librechat.yml.
+    environment:
+      - DOMAIN_CLIENT=https://librechat.reho.dev
+      - DOMAIN_SERVER=https://librechat.reho.dev
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy-network"
+      - "traefik.http.routers.librechat.rule=Host(`librechat.reho.dev`)"
+      - "traefik.http.routers.librechat.entrypoints=websecure"
+      - "traefik.http.routers.librechat.tls.certresolver=letsencrypt"
+      - "traefik.http.services.librechat.loadbalancer.server.port=3080"
 
 networks:
   proxy-network:

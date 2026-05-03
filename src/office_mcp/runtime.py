@@ -52,7 +52,7 @@ WORKFLOW
   3. Every mutating tool on `local://` returns a `download_url` — render
      it as a Markdown link in your answer so the user can click to
      download the file directly from the conversation. Example:
-       `→ [q3.docx](https://office-mcp.h.reho.dev/files/...)`
+       `→ [q3.docx](https://office-mcp.reho.dev/files/...)`
   4. Always echo the resulting `file_uri` alongside the download link.
 
 ERROR HANDLING

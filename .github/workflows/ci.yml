@@ -86,9 +86,9 @@ jobs:
           OFFICE_MCP_MAX_FILE_SIZE_MB=50
           OFFICE_MCP_RATE_LIMIT_PER_MIN=60
           OFFICE_MCP_SIGNING_SECRET=e885a1ec740aa3318faf6e0fea64481eb71717eb2c290938827f8ece570d056e
-          OFFICE_MCP_DOWNLOAD_BASE_URL=https://office-mcp.h.reho.dev
+          OFFICE_MCP_DOWNLOAD_BASE_URL=https://office-mcp.reho.dev
           OFFICE_MCP_DOWNLOAD_URL_TTL_SECONDS=900
-          OFFICE_MCP_PUBLIC_BASE_URL=https://office-mcp.h.reho.dev
+          OFFICE_MCP_PUBLIC_BASE_URL=https://office-mcp.reho.dev
 
           # Azure AD / Microsoft Graph (delegated OAuth → user OneDrive)
           AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}
