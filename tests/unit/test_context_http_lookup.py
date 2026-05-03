@@ -119,6 +119,73 @@ def test_current_user_attaches_token_from_session_index(
     assert ctx.on_behalf_of_token == "bound-AT"
 
 
+def test_current_user_uses_forwarded_oidc_bearer(
+    isolated_token_store: TokenStore,
+) -> None:
+    """LibreChat 0.8.5 forwards the OIDC access token via X-User-Authorization."""
+    fake_request = _request(
+        {
+            "X-LibreChat-User-Id": "alice",
+            "X-User-Authorization": "Bearer oidc-access-token-xyz",
+        }
+    )
+    with patch(
+        "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+    ):
+        ctx = current_user()
+    assert ctx is not None
+    assert ctx.on_behalf_of_token == "oidc-access-token-xyz"
+
+
+def test_current_user_oidc_bearer_takes_precedence(
+    isolated_token_store: TokenStore,
+) -> None:
+    """Forwarded OIDC token wins over the legacy session-store token."""
+    isolated_token_store.put_token(
+        "state-X",
+        TokenEntry(
+            access_token="legacy-AT",
+            refresh_token=None,
+            expires_at=time.time() + 3600,
+            user_oid="oid-1",
+            user_upn="alice@example.com",
+        ),
+    )
+    isolated_token_store.link_session_to_state("session-S1", "state-X")
+
+    fake_request = _request(
+        {
+            "X-LibreChat-User-Id": "alice",
+            "Mcp-Session-Id": "session-S1",
+            "X-User-Authorization": "Bearer oidc-AT",
+        }
+    )
+    with patch(
+        "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+    ):
+        ctx = current_user()
+    assert ctx is not None
+    assert ctx.on_behalf_of_token == "oidc-AT"
+
+
+def test_current_user_ignores_unsubstituted_oidc_placeholder(
+    isolated_token_store: TokenStore,
+) -> None:
+    """Literal ``{{LIBRECHAT_OPENID_ACCESS_TOKEN}}`` → treat as absent, fallback."""
+    fake_request = _request(
+        {
+            "X-LibreChat-User-Id": "alice",
+            "X-User-Authorization": "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}",
+        }
+    )
+    with patch(
+        "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+    ):
+        ctx = current_user()
+    assert ctx is not None
+    assert ctx.on_behalf_of_token is None
+
+
 def test_current_user_no_token_when_session_unknown(
     isolated_token_store: TokenStore,
 ) -> None:

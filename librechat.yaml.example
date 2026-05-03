@@ -34,15 +34,20 @@ mcpServers:
     title: "Office Documents"
     description: "Create and edit Word, Excel, PowerPoint documents."
     headers:
+      # Server-level bearer (auth between LibreChat and office-mcp itself).
       Authorization: "Bearer ${OFFICE_MCP_TOKEN}"
+      # User-level bearer: the OIDC access token LibreChat obtained at SSO,
+      # forwarded as-is. office-mcp uses it directly with Microsoft Graph,
+      # so the user never sees a second consent prompt — single sign-on.
+      X-User-Authorization: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
       X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
       X-LibreChat-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
     serverInstructions: |
       This MCP exposes tools to create and edit Office documents (.docx, .xlsx, .pptx).
       Workflow rules:
         1. Before creating a document, read office://rules/<format> for formatting conventions.
-        2. Files are addressed by URI. The CURRENT deployment only wires the
-           `local://` scheme — do NOT use `s3://`, `az://`, `sp://`, `od://` URIs;
-           those backends are not yet enabled. Example: `local://reports/q3.docx`.
+        2. Files are addressed by URI. The default scheme is `od://` (the user's OneDrive,
+           reached transparently via SSO — no consent prompt needed). Example:
+           `od://Documents/reports/q3.docx`. The `local://` scheme is also available
+           for ephemeral files; `s3://`, `az://`, `sp://` are not wired yet.
         3. Always echo the resulting file_uri to the user so they can retrieve it.
-        4. If a tool errors with UnknownSchemeError, retry with `local://...`.

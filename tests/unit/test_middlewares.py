@@ -143,6 +143,115 @@ async def test_user_context_attaches_session_token_when_available() -> None:
 
 
 @pytest.mark.asyncio
+async def test_user_context_uses_forwarded_oidc_bearer() -> None:
+    """LibreChat 0.8.5 forwards the OIDC access token via X-User-Authorization;
+    the middleware must use it as on_behalf_of_token without touching the
+    legacy session store.
+    """
+
+    async def _whoami_with_token(_: Request) -> JSONResponse:
+        user = current_user()
+        return JSONResponse(
+            {"on_behalf_of_token": user.on_behalf_of_token if user else None}
+        )
+
+    app = Starlette(
+        routes=[Route("/whoami", _whoami_with_token)],
+        middleware=[Middleware(UserContextMiddleware)],
+    )
+
+    response = await _get(
+        app,
+        "/whoami",
+        headers={
+            "X-LibreChat-User-Id": "alice",
+            "X-User-Authorization": "Bearer oidc-access-token-123",
+        },
+    )
+    assert response.json() == {"on_behalf_of_token": "oidc-access-token-123"}
+
+
+@pytest.mark.asyncio
+async def test_user_context_ignores_unsubstituted_oidc_placeholder() -> None:
+    """When the user is not signed in via OIDC, LibreChat forwards the
+    literal ``{{LIBRECHAT_OPENID_ACCESS_TOKEN}}`` placeholder; treat it as
+    absent so the legacy session lookup can take over.
+    """
+    from office_mcp.auth.store import TokenStore
+    from office_mcp.runtime import set_token_store
+
+    set_token_store(TokenStore())
+
+    async def _whoami_with_token(_: Request) -> JSONResponse:
+        user = current_user()
+        return JSONResponse(
+            {"on_behalf_of_token": user.on_behalf_of_token if user else None}
+        )
+
+    app = Starlette(
+        routes=[Route("/whoami", _whoami_with_token)],
+        middleware=[Middleware(UserContextMiddleware)],
+    )
+
+    response = await _get(
+        app,
+        "/whoami",
+        headers={
+            "X-LibreChat-User-Id": "alice",
+            "X-User-Authorization": "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}",
+        },
+    )
+    assert response.json() == {"on_behalf_of_token": None}
+
+
+@pytest.mark.asyncio
+async def test_user_context_oidc_bearer_takes_precedence_over_session() -> None:
+    """When both X-User-Authorization and a known Mcp-Session-Id are present,
+    the forwarded OIDC token wins (single sign-on path).
+    """
+    import time
+
+    from office_mcp.auth.store import TokenEntry, TokenStore
+    from office_mcp.runtime import set_token_store
+
+    store = TokenStore()
+    store.put_token(
+        "state-X",
+        TokenEntry(
+            access_token="legacy-AT",
+            refresh_token=None,
+            expires_at=time.time() + 3600,
+            user_oid="oid-1",
+            user_upn="alice@example.com",
+        ),
+    )
+    store.link_session_to_state("session-S1", "state-X")
+    set_token_store(store)
+
+    async def _whoami_with_token(_: Request) -> JSONResponse:
+        user = current_user()
+        return JSONResponse(
+            {"on_behalf_of_token": user.on_behalf_of_token if user else None}
+        )
+
+    app = Starlette(
+        routes=[Route("/whoami", _whoami_with_token)],
+        middleware=[Middleware(UserContextMiddleware)],
+    )
+
+    response = await _get(
+        app,
+        "/whoami",
+        headers={
+            "X-LibreChat-User-Id": "alice",
+            "X-User-Authorization": "Bearer oidc-AT",
+            "Mcp-Session-Id": "session-S1",
+        },
+    )
+    assert response.json() == {"on_behalf_of_token": "oidc-AT"}
+
+
+@pytest.mark.asyncio
 async def test_user_context_no_token_when_session_unknown() -> None:
     """No leak: an unknown Mcp-Session-Id results in no token attached."""
     from office_mcp.auth.store import TokenStore
