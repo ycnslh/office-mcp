@@ -52,11 +52,24 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
-      - ALLOW_REGISTRATION=true
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
       # MiniMax custom endpoint (read by librechat.yaml ${...} placeholders)
       - MINIMAX_API_KEY=${MINIMAX_API_KEY}
       - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimax.io/v1}
       - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
+      # OIDC SSO (Azure AD) — uses the same app registration as office-mcp.
+      # Setting ALLOW_SOCIAL_LOGIN=true unlocks the "Continuer avec Microsoft"
+      # button on the login screen; ALLOW_REGISTRATION above is OFF so users
+      # cannot create local accounts and must enter via SSO.
+      - ALLOW_SOCIAL_LOGIN=${ALLOW_SOCIAL_LOGIN:-true}
+      - ALLOW_SOCIAL_REGISTRATION=${ALLOW_SOCIAL_REGISTRATION:-true}
+      - OPENID_CLIENT_ID=${OPENID_CLIENT_ID}
+      - OPENID_CLIENT_SECRET=${OPENID_CLIENT_SECRET}
+      - OPENID_ISSUER=${OPENID_ISSUER}
+      - OPENID_SESSION_SECRET=${OPENID_SESSION_SECRET}
+      - OPENID_SCOPE=${OPENID_SCOPE:-openid profile email}
+      - OPENID_CALLBACK_URL=${OPENID_CALLBACK_URL:-/oauth/openid/callback}
+      - OPENID_BUTTON_LABEL=${OPENID_BUTTON_LABEL:-Continuer avec Microsoft}
     volumes:
       - ./librechat.yaml.example:/app/librechat.yaml:ro
       - librechat-images:/app/client/public/images
