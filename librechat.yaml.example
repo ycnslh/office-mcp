@@ -44,15 +44,18 @@ mcpServers:
       X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
       X-LibreChat-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
     serverInstructions: |
-      This MCP exposes tools to create and edit Office documents (.docx, .xlsx, .pptx).
-      Workflow rules:
-        1. Before creating a document, read office://rules/<format> for formatting conventions.
-        2. Files are addressed by URI. The default scheme is `od://` (the user's OneDrive,
-           reached transparently via SSO — no consent prompt needed). When the user does
-           not specify a folder, save under `od://AI Generated/<name>` so generated files
-           cluster in one place. Example: `od://AI Generated/q3.docx`. The `local://`
-           scheme is also available for ephemeral files; `s3://`, `az://`, `sp://` are
-           not wired yet.
+      This MCP creates and edits Office documents (.docx, .xlsx, .pptx) on the user's
+      Microsoft OneDrive. Workflow rules:
+        1. Files are addressed by URI. The only supported scheme is `od://` (the user's
+           own OneDrive, reached transparently via LibreChat SSO — no consent prompt).
+           When the user does not specify a folder, save under
+           `od://AI Generated/<name>` so generated files cluster in one place. Bare
+           names like `od://q3.docx` are rewritten server-side to that same folder.
+        2. NEVER call `*_read` / `*_create` / any other tool with an `office://` URI:
+           `office://rules/...` and `office://templates/...` are MCP *resources*, not
+           file paths, and the call fails with UnknownSchemeError. The formatting
+           rules are also enforced automatically by the engine — you don't need to
+           fetch them to produce well-formatted output.
         3. Do NOT call `fs_list` or `fs_stat` to "scope" OneDrive or "check if a file
            exists" before a `*_create` call — create tools handle auth, overwrite, and
            folder normalization on their own. Go straight to the create tool with your

@@ -17,27 +17,27 @@ from office_mcp.storage.base import FileMetadata
 from office_mcp.utils import signing
 
 _INSTRUCTIONS = """\
-office-mcp creates and edits Word, Excel and PowerPoint documents.
+office-mcp creates and edits Word, Excel and PowerPoint documents on
+the user's Microsoft OneDrive.
 
 ADDRESSING FILES
-  Every tool takes a `file_uri` like `<scheme>://path/to/file.ext`.
-  Two schemes are available in this deployment:
-    - `local://`  — the user's per-account scratch space on the server.
-                    Always available, no auth required. Use it for
-                    drafts, scratch files, and anything the user did not
-                    explicitly ask to put in the cloud.
-    - `od://`     — the user's Microsoft OneDrive (delegated OAuth).
-                    Use when the user mentions OneDrive, Office 365,
-                    "my files in the cloud", or asks to save somewhere
-                    they can open from their Microsoft account.
-  Path components are scoped per user, so a leading `/` is unnecessary.
-  Examples: `local://reports/q3.docx`, `od://AI Generated/q3.docx`.
+  Every tool takes a `file_uri` like `od://path/to/file.ext`. The
+  `od://` scheme maps to the user's own OneDrive (delegated OAuth, no
+  consent prompt — the access token is reused from LibreChat SSO).
 
-  For OneDrive: when the user does not specify a folder, default to
+  When the user does not specify a folder, save under
   `od://AI Generated/<name>` so generated files cluster in one place.
-  Bare names (`od://q3.docx`, no folder) are rewritten server-side to
-  the same `AI Generated/` subfolder; the response carries the canonical
-  `file_uri` — use it verbatim for any follow-up call.
+  Bare names like `od://q3.docx` (no folder) are rewritten server-side
+  to that same `AI Generated/` subfolder; the response always carries
+  the canonical `file_uri` — use it verbatim for any follow-up call.
+
+DO NOT CALL TOOLS WITH `office://` URIs
+  `office://rules/...` and `office://templates/...` are MCP *resources*,
+  not file paths. NEVER pass them to a `*_read` / `*_create` / `*_*`
+  tool — that fails with UnknownSchemeError. The formatting doctrine
+  is already enforced automatically by the engine (Arial fonts, DXA
+  table widths, finance color coding, theme palettes), so you do not
+  need to fetch any rules resource to produce well-formatted output.
 
 DO NOT EXPLORE FIRST
   Never call `fs_list` or `fs_stat` to "scope" OneDrive, "check if a
@@ -47,8 +47,8 @@ DO NOT EXPLORE FIRST
 
     - Auth: the create call surfaces `auth_required` exactly the same
       way `fs_list` would, so you do not need a probe.
-    - Folder normalization: the server rewrites bare-name OneDrive
-      writes into a default folder automatically.
+    - Folder normalization: the server rewrites bare-name writes into
+      a default folder automatically.
     - Existence: create tools overwrite by design — no need to pre-check.
 
   Use `fs_list` ONLY when the user explicitly asks to see what is in
@@ -63,32 +63,25 @@ AUTHENTICATION FOR od://
     2. Stop and wait for the user to confirm they have signed in.
     3. Once they say they are back, RETRY the same tool call with the
        same arguments — the server picks up the new token automatically.
-  Never try to bypass `auth_required` by switching to `local://` unless
-  the user explicitly asks you to.
 
 WORKFLOW
-  1. Before creating a document, consult the matching `office://rules/<format>`
-     resource (docx, xlsx, pptx) for formatting conventions.
-  2. Build the entire document body in a single create call. Each
+  1. Build the entire document body in a single create call. Each
      format has a batched argument:
        - `docx_create(blocks=[...])`  — heading / paragraph / table blocks
        - `xlsx_create(sheets=[...])`  — sheets carrying writes + formulas
        - `pptx_create(slides=[...])`  — title / content / two-content / section slides
      Do not chain a create + multiple appends when you already know
      the content.
-  3. Every mutating tool returns a `download_url` — render it as a
-     Markdown link in your answer so the user can click directly from
-     the conversation. The URL points to the file's *native* viewer
-     when applicable: OneDrive web for `od://` (the user opens the
-     file in their Microsoft account), the server's signed `/files/`
-     endpoint for `local://`. Example:
-       `→ [q3.docx](https://office-mcp.reho.dev/files/...)`
-  4. Always echo the resulting `file_uri` alongside the download link.
+  2. Every mutating tool returns a `download_url` pointing to the file
+     in OneDrive web (the user opens it in their Microsoft account).
+     Render it as a Markdown link so the user can click directly from
+     the conversation.
+  3. Always echo the resulting `file_uri` alongside the download link.
 
 ERROR HANDLING
   If a tool returns `UnknownSchemeError` or `InvalidUriError`, the URI
-  is malformed — fix the scheme/path and retry. Don't silently fall
-  back to a different storage location.
+  is malformed — fix it and retry (almost always: prepend `od://` and
+  pick a folder under `AI Generated/`).
 """
 
 mcp: FastMCP = FastMCP("office-mcp", instructions=_INSTRUCTIONS)

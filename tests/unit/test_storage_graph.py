@@ -722,11 +722,16 @@ async def test_507_surfaces_quota_message(
 # ── bootstrap registers `od` only when oauth is configured ─────────────
 
 
-def test_bootstrap_registers_od_only_when_oauth_configured(
+def test_bootstrap_registers_only_one_backend_at_a_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The deploy registers GraphBackend conditionally — verify here so a
-    refactor of build_app() can't silently drop the gate.
+    """Production deploys register exactly one backend per build_app().
+
+    When Azure AD is configured (``oauth_configured``) only ``od://`` is
+    registered — local:// is intentionally hidden so the LLM never has
+    to disambiguate where files should live. When Azure is absent
+    (dev mode) we fall back to LocalBackend so the server still has a
+    usable backend.
 
     Relies on ``_bootstrap`` always rebuilding the registry on each call
     (the ``_BOOTSTRAPPED`` early-return is *after* the registry block).
@@ -766,6 +771,8 @@ def test_bootstrap_registers_od_only_when_oauth_configured(
         azure_client_secret="s",  # noqa: S106 — dummy literal for tests
     )
     build_app(with_oauth)
-    assert "od" in dict(get_registry().items())
+    schemes = dict(get_registry().items())
+    assert "od" in schemes
+    assert "local" not in schemes
 
 

@@ -1,10 +1,11 @@
 # office-mcp
 
 MCP server that creates and edits Word, Excel, and PowerPoint
-documents. Designed for **LibreChat 0.8.4** over the `streamable-http`
-transport, with a pluggable storage backend (local volume today;
-SharePoint/OneDrive via Microsoft Graph, S3, and Azure Blob are
-pending client validation).
+documents on the user's Microsoft OneDrive. Designed for
+**LibreChat 0.8.4** over the `streamable-http` transport. The storage
+layer is pluggable (StorageBackend ABC) — additional backends
+(SharePoint, S3, Azure Blob, local volume) can be re-enabled when
+the client asks for them.
 
 > See [CLAUDE.md](./CLAUDE.md) for the full plan and rationale, and
 > [docs/librechat-integration.md](./docs/librechat-integration.md) for
