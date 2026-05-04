@@ -22,8 +22,8 @@ LibreChat's storage.
 | Group | Tools |
 |---|---|
 | Word  | `docx_create` / `docx_read` / `docx_append` / `docx_replace` / `docx_remove` / `docx_to_pdf` |
-| Excel | `xlsx_create` / `xlsx_read_range` / `xlsx_write_range` / `xlsx_apply_formula` |
-| PowerPoint | `pptx_create` / `pptx_add_slide` / `pptx_read` |
+| Excel | `xlsx_create` / `xlsx_read_range` / `xlsx_update` |
+| PowerPoint | `pptx_create` / `pptx_read` / `pptx_append` / `pptx_replace` |
 | Filesystem | `fs_list` / `fs_stat` / `fs_copy` / `fs_delete` |
 
 ## Quickstart (dev stack — MCP + LibreChat 0.8.4 side by side)

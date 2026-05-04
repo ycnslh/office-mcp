@@ -5,6 +5,18 @@ Phase 5 keeps theming light: palette (title/body/background colors + font)
 is applied per slide at creation time. Full template-based themes (ship an
 actual ``.pptx`` file and open it with ``Presentation(path)``) can land in
 V2 if the client wants richer decks.
+
+The public API is **batched-by-intent**: a single ``compose`` call
+produces a complete deck (theme + ordered slide list), ``append_slides``
+pushes N slides onto an existing deck in one round-trip, and
+``replace_slides`` patches N slides by index in one call.
+
+Slide schema (used by ``compose`` and ``append_slides``)::
+
+    {"type": "title",       "title": "...", "subtitle": "..."}
+    {"type": "content",     "title": "...", "bullets": [...]}
+    {"type": "two-content", "title": "...", "left": [...], "right": [...]}
+    {"type": "section",     "title": "..."}
 """
 
 from __future__ import annotations
@@ -78,103 +90,94 @@ _LAYOUTS: dict[str, int] = {
     "two-content": 3,  # Title + two bullet columns
     "blank": 6,
 }
-_ALLOWED_LAYOUTS = tuple(_LAYOUTS.keys())
+_SLIDE_TYPES = ("title", "content", "two-content", "section")
 
 
 # ── public API ────────────────────────────────────────────────────────
 
 
-def create(
+def compose(
     *,
     theme: str = DEFAULT_THEME,
-    title: str | None = None,
-    subtitle: str | None = None,
+    slides: list[dict[str, Any]] | None = None,
 ) -> bytes:
-    """Build a new deck; if ``title`` is supplied, add a title slide."""
+    """Build a complete deck in one call.
+
+    Args:
+        theme: ``corporate`` (default), ``minimal``, or ``cyberpunk``.
+        slides: Ordered list of typed slide blocks. See module docstring
+            for the schema.
+    """
     _require_theme(theme)
     prs = Presentation()
-    if title:
-        slide = _add_layout_slide(prs, "title")
-        _set_title(slide, title, theme)
-        if subtitle:
-            _set_subtitle(slide, subtitle, theme)
-        _apply_background(slide, theme)
+    _render_slides(prs, slides or [], theme=theme)
     return _dump(prs)
 
 
-def add_slide(
+def append_slides(
     data: bytes,
     *,
-    layout: str = "content",
-    title: str,
-    content: list[str] | None = None,
-    content_right: list[str] | None = None,
-    subtitle: str | None = None,
+    slides: list[dict[str, Any]],
     theme: str = DEFAULT_THEME,
 ) -> bytes:
-    """Append a slide using the named ``layout`` and populate its shapes."""
-    if layout not in _LAYOUTS:
-        raise ValueError(
-            f"unknown layout {layout!r}; expected one of {list(_ALLOWED_LAYOUTS)}"
-        )
+    """Append a batch of slides to an existing deck."""
     _require_theme(theme)
     prs = Presentation(BytesIO(data))
-    slide = _add_layout_slide(prs, layout)
-    _set_title(slide, title, theme)
-
-    if layout == "title" and subtitle:
-        _set_subtitle(slide, subtitle, theme)
-    elif layout == "content" and content:
-        _fill_bullets(slide, placeholder_idx=1, lines=content, theme=theme)
-    elif layout == "two-content":
-        if content:
-            _fill_bullets(slide, placeholder_idx=1, lines=content, theme=theme)
-        if content_right:
-            _fill_bullets(slide, placeholder_idx=2, lines=content_right, theme=theme)
-    # section / blank: title-only, nothing else to fill.
-
-    _apply_background(slide, theme)
+    _render_slides(prs, slides, theme=theme)
     return _dump(prs)
 
 
-def update_slide(
+def replace_slides(
     data: bytes,
     *,
-    index: int,
-    title: str | None = None,
-    content: list[str] | None = None,
-    content_right: list[str] | None = None,
+    updates: list[dict[str, Any]],
     theme: str = DEFAULT_THEME,
 ) -> bytes:
-    """Mutate the slide at ``index`` (0-based) in-place.
+    """Patch one or more slides in place.
 
-    Each field is optional and only acted on when supplied:
-
-    * ``title``: replaces the slide title (no-op if the slide has no
-      title placeholder).
-    * ``content``: replaces the bullets in placeholder idx 1.
-    * ``content_right``: replaces the bullets in placeholder idx 2.
-
-    Bullet replacements clear the existing paragraphs first so the
-    caller doesn't end up with the old and new lists concatenated.
-    Targets a placeholder that doesn't exist on the slide (e.g.
-    passing ``content`` to a section/title layout) is silently
-    ignored — we don't pretend to know the layout's intent.
+    Each entry is ``{"slide_index": int, "title"?, "bullets"?,
+    "left"?, "right"?}``. Fields that are present overwrite that part
+    of the slide; absent fields are left alone. Bullet replacements
+    clear the existing paragraphs first.
     """
     _require_theme(theme)
     prs = Presentation(BytesIO(data))
     slides = list(prs.slides)
-    if not 0 <= index < len(slides):
-        raise IndexError(
-            f"slide index {index} out of range (deck has {len(slides)} slides)"
-        )
-    slide = slides[index]
-    if title is not None:
-        _set_title(slide, title, theme)
-    if content is not None:
-        _replace_bullets(slide, placeholder_idx=1, lines=content, theme=theme)
-    if content_right is not None:
-        _replace_bullets(slide, placeholder_idx=2, lines=content_right, theme=theme)
+    for u_idx, update in enumerate(updates):
+        index = update.get("slide_index")
+        if not isinstance(index, int):
+            raise ValueError(
+                f"update {u_idx}: 'slide_index' must be an integer"
+            )
+        if not 0 <= index < len(slides):
+            raise IndexError(
+                f"update {u_idx}: slide_index {index} out of range "
+                f"(deck has {len(slides)} slides)"
+            )
+        slide = slides[index]
+        if "title" in update and update["title"] is not None:
+            _set_title(slide, str(update["title"]), theme)
+        if "bullets" in update and update["bullets"] is not None:
+            _replace_bullets(
+                slide,
+                placeholder_idx=1,
+                lines=list(update["bullets"]),
+                theme=theme,
+            )
+        if "left" in update and update["left"] is not None:
+            _replace_bullets(
+                slide,
+                placeholder_idx=1,
+                lines=list(update["left"]),
+                theme=theme,
+            )
+        if "right" in update and update["right"] is not None:
+            _replace_bullets(
+                slide,
+                placeholder_idx=2,
+                lines=list(update["right"]),
+                theme=theme,
+            )
     return _dump(prs)
 
 
@@ -213,6 +216,62 @@ def list_themes() -> list[str]:
 
 
 # ── internals ────────────────────────────────────────────────────────
+
+
+def _render_slides(
+    prs: _Presentation, slides: list[dict[str, Any]], *, theme: str
+) -> None:
+    for i, spec in enumerate(slides):
+        kind = spec.get("type")
+        title = spec.get("title")
+        if kind not in _SLIDE_TYPES:
+            raise ValueError(
+                f"slide {i}: unknown type {kind!r}; expected one of {_SLIDE_TYPES}"
+            )
+        if not isinstance(title, str) or not title:
+            raise ValueError(
+                f"slide {i}: 'title' must be a non-empty string"
+            )
+        if kind == "title":
+            slide = _add_layout_slide(prs, "title")
+            _set_title(slide, title, theme)
+            subtitle = spec.get("subtitle")
+            if isinstance(subtitle, str) and subtitle:
+                _set_subtitle(slide, subtitle, theme)
+        elif kind == "content":
+            bullets = spec.get("bullets") or []
+            if not isinstance(bullets, list) or not bullets:
+                raise ValueError(
+                    f"slide {i}: 'bullets' must be a non-empty list of strings"
+                )
+            slide = _add_layout_slide(prs, "content")
+            _set_title(slide, title, theme)
+            _fill_bullets(
+                slide, placeholder_idx=1, lines=[str(b) for b in bullets], theme=theme
+            )
+        elif kind == "two-content":
+            left = spec.get("left") or []
+            right = spec.get("right") or []
+            if not isinstance(left, list) or not left:
+                raise ValueError(
+                    f"slide {i}: 'left' must be a non-empty list of strings"
+                )
+            if not isinstance(right, list) or not right:
+                raise ValueError(
+                    f"slide {i}: 'right' must be a non-empty list of strings"
+                )
+            slide = _add_layout_slide(prs, "two-content")
+            _set_title(slide, title, theme)
+            _fill_bullets(
+                slide, placeholder_idx=1, lines=[str(b) for b in left], theme=theme
+            )
+            _fill_bullets(
+                slide, placeholder_idx=2, lines=[str(b) for b in right], theme=theme
+            )
+        else:  # "section"
+            slide = _add_layout_slide(prs, "section")
+            _set_title(slide, title, theme)
+        _apply_background(slide, theme)
 
 
 def _dump(prs: _Presentation) -> bytes:

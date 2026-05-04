@@ -1,8 +1,13 @@
 """MCP tools for Excel spreadsheet creation and editing.
 
 Engine work is offloaded to a worker thread via :func:`asyncio.to_thread`
-so the LibreOffice recalc invoked by ``xlsx_apply_formula`` (3-5 s) does
-not block the FastMCP event loop.
+so the LibreOffice recalc invoked when ``recalc=True`` (3-5 s) does not
+block the FastMCP event loop.
+
+The editing surface is **batched by intent**: a single call to
+``xlsx_create`` (with a ``sheets`` list carrying writes + formulas)
+produces a complete workbook, and ``xlsx_update`` lets you apply many
+writes / formulas across many sheets in one round-trip.
 """
 
 from __future__ import annotations
@@ -18,28 +23,62 @@ from office_mcp.runtime import download_url_for, get_registry
 
 async def xlsx_create(
     file_uri: str,
-    sheets: list[str] | None = None,
+    sheets: list[dict[str, Any]] | None = None,
+    recalc: bool = True,
 ) -> dict[str, Any]:
-    """Create a new Excel workbook at ``file_uri``.
+    """Create a complete Excel workbook in a single call.
+
+    Use this directly. Do not call ``fs_list``, ``fs_stat`` or any other
+    tool to "check OneDrive" or "see if the file exists" first — this
+    tool creates or overwrites at ``file_uri`` in one step. Pass the
+    full workbook body via ``sheets`` and let one LibreOffice recalc at
+    the end bake every formula in one pass.
+
+    Sheet schema (each entry of ``sheets`` is a dict)::
+
+        {
+            "name": "Inputs",
+            "writes":   [{"start_cell": "A1",
+                          "values": [["Region", "Units", "Price"]],
+                          "style": "header"},
+                         {"start_cell": "A2",
+                          "values": [["EU", 1200, 49.9],
+                                     ["US",  900, 52.0]],
+                          "style": "input"}],
+            "formulas": [{"cell": "D2", "formula": "=B2*C2"},
+                         {"cell": "D3", "formula": "=B3*C3"},
+                         {"cell": "D4", "formula": "=SUM(D2:D3)"}],
+        }
+
+    ``style`` is one of ``"input"`` (blue), ``"formula"`` (black),
+    ``"link"`` (green for cross-sheet refs) or ``"header"`` (bold).
 
     Args:
-        file_uri: Destination URI, e.g. ``local://budget/2026.xlsx``.
-        sheets: Optional list of sheet names. Defaults to a single
-            ``Sheet`` if omitted.
+        file_uri: Destination URI, e.g. ``od://AI Generated/budget.xlsx``.
+        sheets: Ordered list of sheet specs. Empty (or omitted) creates
+            a single empty default sheet.
+        recalc: When ``True`` (default), LibreOffice computes formula
+            cells once at the end so subsequent reads return values,
+            not formula strings. Set ``False`` only if you intend to
+            recalc later via a separate ``xlsx_update``.
     """
     user = require_current_user()
     backend = get_registry().get(file_uri)
-    payload = await asyncio.to_thread(xlsx_engine.create, sheets=sheets)
+    payload = await asyncio.to_thread(
+        xlsx_engine.compose, sheets=sheets, recalc=recalc
+    )
     meta = await backend.write(file_uri, payload, user_ctx=user)
+    sheet_names = [s.get("name") for s in (sheets or []) if s.get("name")]
     return {
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
         "download_url": download_url_for(meta, user.user_id),
-        "sheets": sheets or ["Sheet"],
+        "sheets": sheet_names,
+        "recalculated": recalc,
         "summary": (
-            f"Created workbook at {meta.uri} with sheets "
-            f"{sheets or ['Sheet']}"
+            f"Created workbook at {meta.uri}"
+            + (f" with sheets {sheet_names}" if sheet_names else "")
         ),
     }
 
@@ -74,87 +113,47 @@ async def xlsx_read_range(
     }
 
 
-async def xlsx_write_range(
+async def xlsx_update(
     file_uri: str,
-    sheet: str,
-    start_cell: str,
-    values: list[list[Any]],
-    style: str = "input",
+    sheets: list[dict[str, Any]],
+    recalc: bool = True,
 ) -> dict[str, Any]:
-    """Write a 2D ``values`` block starting at ``start_cell``.
+    """Apply many writes and formulas to an existing workbook in one call.
+
+    Use this — not multiple sequential calls — to push several writes
+    or formulas across one or more sheets. ``sheets`` uses the same
+    schema as ``xlsx_create``; sheets that don't exist yet are created
+    automatically.
 
     Args:
         file_uri: URI of the workbook to mutate.
-        sheet: Sheet name (created if it does not exist).
-        start_cell: Top-left cell, e.g. ``A1``.
-        values: 2D list of values to write.
-        style: ``"input"`` (default, blue), ``"formula"`` (black),
-            ``"link"`` (green) or ``"header"`` (bold).
+        sheets: Ordered list of sheet update specs (name + writes +
+            formulas). At least one sheet entry is required.
+        recalc: Run a single LibreOffice recalc at the end when
+            formulas were set. Default ``True``.
     """
     user = require_current_user()
     backend = get_registry().get(file_uri)
     original = await backend.read(file_uri, user_ctx=user)
     updated = await asyncio.to_thread(
-        xlsx_engine.write_range,
-        original,
-        sheet=sheet,
-        start_cell=start_cell,
-        values=values,
-        style=style,
+        xlsx_engine.apply_updates, original, sheets=sheets, recalc=recalc
     )
     meta = await backend.write(file_uri, updated, user_ctx=user)
-    rows = len(values)
-    cols = len(values[0]) if values else 0
+    write_count = sum(len(s.get("writes") or []) for s in sheets)
+    formula_count = sum(len(s.get("formulas") or []) for s in sheets)
     return {
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
         "download_url": download_url_for(meta, user.user_id),
+        "recalculated": recalc and formula_count > 0,
         "summary": (
-            f"Wrote {rows}×{cols} {style} block at {sheet}!{start_cell} in {meta.uri}"
-        ),
-    }
-
-
-async def xlsx_apply_formula(
-    file_uri: str,
-    sheet: str,
-    cell: str,
-    formula: str,
-    recalc: bool = True,
-) -> dict[str, Any]:
-    """Set a formula in a single cell, optionally recalculating the workbook.
-
-    With ``recalc=True`` (the default) LibreOffice opens the workbook
-    headlessly and bakes computed values into every formula cell. This
-    adds 3-5 s; pass ``recalc=False`` when chaining many formula writes
-    and recalc once at the end with a final ``recalc=True`` call.
-    """
-    user = require_current_user()
-    backend = get_registry().get(file_uri)
-    original = await backend.read(file_uri, user_ctx=user)
-    updated = await asyncio.to_thread(
-        xlsx_engine.apply_formula,
-        original,
-        sheet=sheet,
-        cell=cell,
-        formula=formula,
-        recalc=recalc,
-    )
-    meta = await backend.write(file_uri, updated, user_ctx=user)
-    return {
-        "file_uri": meta.uri,
-        "size_bytes": meta.size_bytes,
-        "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
-        "recalculated": recalc,
-        "summary": (
-            f"Set formula {formula!r} at {sheet}!{cell} in {meta.uri}"
-            + (" (recalculated)" if recalc else " (recalc skipped)")
+            f"Applied {write_count} write(s) and {formula_count} formula(s) "
+            f"across {len(sheets)} sheet(s) in {meta.uri}"
         ),
     }
 
 
 # Register with FastMCP imperatively — see tools/docx_tools.py for the why.
-for _fn in (xlsx_create, xlsx_read_range, xlsx_write_range, xlsx_apply_formula):
+for _fn in (xlsx_create, xlsx_read_range, xlsx_update):
     register_tool(_fn)

@@ -67,13 +67,10 @@ created → clickable download in the conversation).
 
 1. `office://rules/xlsx` resource read — key takeaway: blue inputs /
    black formulas / green cross-sheet links, recalc required.
-2. `xlsx_create(file_uri=..., sheets=["Inputs", "Calc", "Output"])`.
-3. `xlsx_write_range` for the EU/US/APAC inputs with `style="input"`.
-4. Three `xlsx_apply_formula` for per-region revenue (`recalc=False`
-   to batch), then one with `recalc=True` for the total (so LibreOffice
-   bakes all formulas at once).
-5. `xlsx_apply_formula(cell="Output!A1", formula="=Calc!B5")` — green
-   link color applied automatically.
+2. **One** `xlsx_create` call with `sheets=[…]` carrying the three
+   sheets, the EU/US/APAC inputs (`style="input"`), the per-region
+   revenue formulas, and the cross-sheet link in `Output`. A single
+   LibreOffice recalc at the end bakes every formula in one pass.
 
 **Why it lands:**
 
@@ -110,11 +107,12 @@ created → clickable download in the conversation).
 **What the LLM should do:**
 
 1. `office://rules/pptx` resource read.
-2. `pptx_create(theme="cyberpunk", title=..., subtitle=...)`.
-3. A mix of layout-specific add calls: `pptx_add_section_slide`,
-   `pptx_add_content_slide` (with a required ``bullets`` array),
-   `pptx_add_two_content_slide`, etc.
-4. Reply with the signed download URL.
+2. **One** `pptx_create` call with `theme="cyberpunk"` and a `slides=[…]`
+   list covering the title, the two section dividers, the content
+   slide, and the two-content slide — the entire deck in a single
+   round-trip. Each slide has its `type` (`title` / `content` /
+   `two-content` / `section`).
+3. Reply with the download URL.
 
 **Why it lands:**
 

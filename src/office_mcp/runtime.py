@@ -69,10 +69,13 @@ AUTHENTICATION FOR od://
 WORKFLOW
   1. Before creating a document, consult the matching `office://rules/<format>`
      resource (docx, xlsx, pptx) for formatting conventions.
-  2. Build the entire document body in a single create call (pass the
-     full content as the create tool's batched argument — e.g. `blocks`
-     for `docx_create`). Do not chain a create + multiple appends when
-     you already know the content.
+  2. Build the entire document body in a single create call. Each
+     format has a batched argument:
+       - `docx_create(blocks=[...])`  — heading / paragraph / table blocks
+       - `xlsx_create(sheets=[...])`  — sheets carrying writes + formulas
+       - `pptx_create(slides=[...])`  — title / content / two-content / section slides
+     Do not chain a create + multiple appends when you already know
+     the content.
   3. Every mutating tool returns a `download_url` — render it as a
      Markdown link in your answer so the user can click directly from
      the conversation. The URL points to the file's *native* viewer
