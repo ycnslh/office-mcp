@@ -3,8 +3,8 @@
 These are format-agnostic: they let the LLM inspect, move, or delete
 files without needing the engine layer. Cross-backend operations work
 transparently — ``fs_copy`` reads bytes from the source backend and
-writes them to the destination, so ``local://`` ↔ ``s3://`` copies will
-just work once those backends land in Phases 7-8.
+writes them to the destination, so other backends (S3, Azure Blob,
+SharePoint) will plug in without changes once they land.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from office_mcp.runtime import download_url_for, get_registry
 
 
 async def fs_list(uri_prefix: str) -> dict[str, Any]:
-    """List files under a URI prefix.
+    """List files in a OneDrive folder.
 
     Call this only when the user explicitly asks to see folder contents,
     or when you need to find an existing file to edit. Do NOT use it as
@@ -25,20 +25,15 @@ async def fs_list(uri_prefix: str) -> dict[str, Any]:
     create tools handle auth and overwrite on their own, so the list
     pre-call only adds latency.
 
-    Pick the scheme from the user's intent — never default silently:
-
-    * ``od://`` — the user's Microsoft OneDrive. Use whenever they say
-      "OneDrive", "my Microsoft files", "cloud", "Office 365". The bare
-      ``od://`` lists the drive root; ``od://Documents/`` lists a folder.
-      First call returns ``{"auth_required": true, "login_url": ...}`` —
-      surface the URL, wait for the user, then retry with the same args.
-    * ``local://`` — the user's per-account scratch space on the server.
-      Use only for drafts the user hasn't asked to put in the cloud.
-      ``local://`` lists the whole scope; ``local://reports/`` a folder.
+    The bare ``od://`` lists the drive root; ``od://AI Generated/``
+    lists the folder office-mcp drops generated files in by default.
+    First call against ``od://`` in a fresh chat returns
+    ``{"auth_required": true, "login_url": ...}`` — surface the URL,
+    wait for the user, then retry with the same args.
 
     Args:
         uri_prefix: A directory-like URI. Examples: ``od://``,
-            ``od://Documents/``, ``local://``, ``local://reports/``.
+            ``od://AI Generated/``, ``od://Documents/``.
     """
     user = require_current_user()
     backend = get_registry().get(uri_prefix)
@@ -68,10 +63,10 @@ async def fs_stat(file_uri: str) -> dict[str, Any]:
     create tools overwrite by design, so the stat pre-call adds latency
     for nothing.
 
-    ``file_uri`` carries the storage scheme — ``od://AI Generated/q3.docx``
-    for OneDrive, ``local://reports/q3.docx`` for the server scratch
-    space. ``od://`` may return an ``auth_required`` payload on first
-    call; surface the login URL and retry.
+    ``file_uri`` is on the user's OneDrive, e.g.
+    ``od://AI Generated/q3.docx``. The first ``od://`` call in a fresh
+    chat may return an ``auth_required`` payload — surface the login
+    URL and retry.
     """
     user = require_current_user()
     backend = get_registry().get(file_uri)
@@ -87,12 +82,12 @@ async def fs_stat(file_uri: str) -> dict[str, Any]:
 
 
 async def fs_copy(source_uri: str, destination_uri: str) -> dict[str, Any]:
-    """Copy a file between URIs.
+    """Copy a file from one OneDrive URI to another.
 
-    Works across storage backends: ``local://`` ↔ ``od://`` is the
-    typical case (publish a draft from local scratch to the user's
-    OneDrive, or pull a OneDrive file down to local for editing). Same-
-    scheme copies are handled identically — no fast path, but correct.
+    Use this to duplicate a document under a new name or move it to a
+    different folder. Same-scheme copies (``od://`` → ``od://``) read
+    the bytes through the backend and write them at the destination —
+    the source is unchanged.
     """
     user = require_current_user()
     source_backend = get_registry().get(source_uri)

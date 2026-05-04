@@ -14,7 +14,7 @@ created → clickable download in the conversation).
 
 **Prompt:**
 
-> Crée un rapport trimestriel dans `local://demos/q3-report.docx`
+> Crée un rapport trimestriel dans `od://AI Generated/q3-report.docx`
 > intitulé "Rapport Q3 2026". Consulte d'abord
 > `office://rules/docx` pour les conventions de mise en forme. Ajoute :
 > - une section "Résumé exécutif" avec deux paragraphes ;
@@ -31,7 +31,7 @@ created → clickable download in the conversation).
 2. **One** `docx_create` call with `title="Rapport Q3 2026"` and a
    `blocks` list covering the three sections + the Région/Revenu/QoQ
    table — the entire document body in a single round-trip.
-3. `docx_to_pdf("local://demos/q3-report.docx")`.
+3. `docx_to_pdf("od://AI Generated/q3-report.docx")`.
 4. Reply with two Markdown links (docx + pdf).
 
 **Why it lands:**
@@ -48,7 +48,7 @@ created → clickable download in the conversation).
 
 **Prompt:**
 
-> Construis un mini budget dans `local://demos/budget-2026.xlsx`.
+> Construis un mini budget dans `od://AI Generated/budget-2026.xlsx`.
 > Consulte `office://rules/xlsx`. Crée 3 feuilles (`Inputs`, `Calc`,
 > `Output`).
 >
@@ -87,7 +87,7 @@ created → clickable download in the conversation).
 
 **Prompt:**
 
-> Génère un deck dans `local://demos/roadmap-2026.pptx` avec le thème
+> Génère un deck dans `od://AI Generated/roadmap-2026.pptx` avec le thème
 > `cyberpunk`. Consulte `office://rules/pptx`. Structure :
 >
 > - Slide de titre : "Roadmap 2026 — office-mcp", sous-titre "Netwatch
@@ -127,23 +127,15 @@ created → clickable download in the conversation).
 
 ## Reset between scenarios
 
-If you need to clean slate between demos:
-
-```bash
-ssh pixel 'docker exec office-mcp rm -rf /data/<user-id>/demos'
-```
-
-(Replace `<user-id>` with whatever the LLM is scoping to — either a
-real MongoDB ObjectID or `demo-user` depending on LibreChat's header
-substitution for that session.)
+If you need to clean slate between demos, ask the user to delete the
+files in their OneDrive `AI Generated/` folder, or have the LLM call
+`fs_delete` on each demo URI.
 
 ## Bailout prompts
 
 If a scenario gets stuck (LLM loops, tool returns an error it can't
 recover from), use these short prompts to force a retry:
 
-- "Tu as utilisé `s3://` qui n'est pas disponible. Recommence avec
-  `local://`."
 - "Oublie l'état précédent. Reprends depuis zéro sur le même
   `file_uri` : appelle `fs_delete` puis `*_create` à nouveau."
 - "Montre-moi le lien de téléchargement uniquement, sous forme de

@@ -471,12 +471,18 @@ def _bootstrap(settings: Settings) -> None:
     setup_logging(settings.log_level)
     set_settings(settings)
     registry = StorageRegistry()
-    registry.register(LocalBackend(root=settings.local_root))
     if settings.oauth_configured:
-        # Only register the Graph backend when Azure AD is wired —
-        # otherwise `od://` URIs raise UnknownSchemeError, which is
-        # the right signal in dev where creds are absent.
+        # Production deployment: OneDrive only. LocalBackend stays in the
+        # codebase (and remains the dev-mode fallback below) so we can
+        # re-enable the local:// scheme when we add multi-storage support
+        # — for now we keep the surface to a single backend so the LLM
+        # never has to disambiguate where the user's files should live.
         registry.register(GraphBackend(default_folder=settings.od_default_folder))
+    else:
+        # Dev mode without Azure creds: keep LocalBackend so the server
+        # has at least one usable backend (tests bypass this path and
+        # build their own registry via set_registry()).
+        registry.register(LocalBackend(root=settings.local_root))
     set_registry(registry)
 
     set_token_store(TokenStore())

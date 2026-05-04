@@ -49,8 +49,8 @@ async def docx_create(
         ``{"type": "table", "headers": ["..."], "rows": [["..."]]}``
 
     Args:
-        file_uri: Destination URI, e.g. ``local://reports/q3.docx`` or
-            ``od://me/Documents/report.docx``.
+        file_uri: Destination URI on the user's OneDrive, e.g.
+            ``od://AI Generated/q3.docx``.
         title: Optional document title rendered as the Word ``Title`` style
             at the top of the document.
         blocks: Ordered list of headings, paragraphs and tables that make
