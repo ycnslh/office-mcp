@@ -8,9 +8,11 @@ calls.
 ## Color coding (finance convention)
 
 Universal financial-modeling convention. The engine applies it
-automatically when you use the `xlsx_write_range` and
-`xlsx_apply_formula` tools — do **not** override unless the workbook
-has its own house style.
+automatically based on the `style` field of each `writes` block in
+`xlsx_create` / `xlsx_update` (`"input"` blue, `"formula"` black,
+`"link"` green, `"header"` bold) and from the formula content
+(`!` in the formula → cross-sheet link → green). Do **not** override
+unless the workbook has its own house style.
 
 | Cell type | Color           | Used for                                              |
 |-----------|-----------------|-------------------------------------------------------|
@@ -49,9 +51,10 @@ edit (blue) from what they must not (black, green).
 - Avoid volatile functions (`NOW`, `OFFSET`, `INDIRECT`) — they
   recalculate on every change and confuse reviewers.
 - After writing a formula, the spreadsheet's cached values are stale
-  until LibreOffice recomputes them. The `xlsx_apply_formula` tool
-  triggers a recalc by default; pass `recalc=False` only when you'll
-  immediately apply more formulas, then recalc once at the end.
+  until LibreOffice recomputes them. `xlsx_create` and `xlsx_update`
+  trigger a single recalc at the end by default (one pass for the
+  whole workbook). Pass `recalc=False` if you'll chain another update
+  and want to amortise the recalc cost.
 
 ## Forbidden
 
@@ -60,6 +63,26 @@ edit (blue) from what they must not (black, green).
 - Color used for emphasis without a documented semantic meaning.
 - Multiple data tables on a single sheet.
 - Volatile functions in performance-sensitive workbooks.
+
+## How to call the tools
+
+- **Build the entire workbook in one `xlsx_create` call.** Pass the
+  full content via `sheets=[…]`, where each sheet carries its
+  `writes` (value blocks) and `formulas` (single-cell formula
+  assignments). One LibreOffice recalc fires at the end and bakes
+  every formula in one pass.
+- **Editing existing workbooks is also batched.** A single
+  `xlsx_update(sheets=[…])` adds writes/formulas across one or more
+  sheets and runs one recalc.
+- **Sheet schema** for both calls::
+
+      {
+          "name": "Inputs",
+          "writes":   [{"start_cell": "A1",
+                        "values": [["Region", "Units", "Price"]],
+                        "style": "header"}],
+          "formulas": [{"cell": "D2", "formula": "=B2*C2"}],
+      }
 
 ## Templates
 

@@ -57,7 +57,10 @@ mcpServers:
            exists" before a `*_create` call — create tools handle auth, overwrite, and
            folder normalization on their own. Go straight to the create tool with your
            chosen `file_uri`.
-        4. Build the entire document body in a single create call (pass the full content
-           via the create tool's batched argument — e.g. `blocks` for `docx_create`).
-           Do not chain create + multiple appends when you already know the content.
+        4. Build the entire document body in a single create call. Each format has a
+           batched argument:
+             - `docx_create(blocks=[...])`     — list of {type: heading|paragraph|table, ...}
+             - `xlsx_create(sheets=[...])`     — list of {name, writes: [...], formulas: [...]}
+             - `pptx_create(slides=[...])`     — list of {type: title|content|two-content|section, ...}
+           Do not chain create + multiple appends/writes when you already know the content.
         5. Always echo the resulting file_uri to the user so they can retrieve it.

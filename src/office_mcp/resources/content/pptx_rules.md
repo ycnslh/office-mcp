@@ -58,3 +58,18 @@ Mixing themes across slides in the same deck breaks the visual rhythm.
 For recurring decks (QBR, product launch, hiring pitch) prefer a
 template. List available templates with `office://templates/list`
 when that resource ships (V2).
+
+## How to call the tools
+
+- **Build the entire deck in one `pptx_create` call.** Pass the full
+  slide list via `slides=[…]` — each slide is a typed block:
+
+      {"type": "title",       "title": "...", "subtitle": "..."}
+      {"type": "content",     "title": "...", "bullets": [...]}
+      {"type": "two-content", "title": "...", "left": [...], "right": [...]}
+      {"type": "section",     "title": "..."}
+
+- **Editing existing decks is also batched.** Use `pptx_append`
+  (append N slides) or `pptx_replace` (patch N slides by
+  `slide_index`). Do not chain create + multiple per-slide adds when
+  you already know the deck structure.

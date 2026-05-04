@@ -134,27 +134,22 @@ afin que l'LLM ne chaîne plus de séquences `create + N×append + M×insert`.
 > Pas de `docx_delete` (côté MCP) : supprimer le fichier passe par `fs_delete`,
 > qui couvre tous les backends storage de manière cohérente.
 
-### Xlsx (7 outils)
+### Xlsx (3 outils, batched-by-intent)
 
 | Tool | Description |
 |---|---|
-| `xlsx_create` | Crée un xlsx vide avec sheets nommées |
-| `xlsx_read_range` | Lit une plage (sheet + range A1:C10), retourne JSON |
-| `xlsx_write_range` | Écrit des valeurs dans une plage (list of lists) |
-| `xlsx_add_sheet` | Ajoute une feuille |
-| `xlsx_apply_formula` | Écrit des formules dans une plage, déclenche recalc LibreOffice |
-| `xlsx_apply_format` | Applique format cellule (nombre, couleur, police) selon conventions finance |
-| `xlsx_add_chart` | Ajoute un chart (bar/line/pie) référençant une plage |
+| `xlsx_create` | Crée un xlsx complet en un appel : `sheets=[{name, writes, formulas}]`, recalc LibreOffice unique à la fin |
+| `xlsx_read_range` | Lit une plage (sheet + range A1:C10) |
+| `xlsx_update` | Applique N writes + N formulas sur N sheets en un appel (recalc unique batché) |
 
-### Pptx (5 outils)
+### Pptx (4 outils, batched-by-intent)
 
 | Tool | Description |
 |---|---|
-| `pptx_create` | Crée un pptx avec un thème (cyberpunk, corporate, minimal) |
-| `pptx_add_slide` | Ajoute une slide via layout (title / content / two-content / section-header) |
-| `pptx_update_slide` | Met à jour le contenu d'une slide existante |
+| `pptx_create` | Crée un deck complet en un appel : `theme` + `slides=[…]` (types : title/content/two-content/section) |
 | `pptx_read` | Extrait texte + structure des slides |
-| `pptx_export_thumbnails` | Génère des PNG de preview (via LibreOffice) |
+| `pptx_append` | Ajoute N slides à la fin en un appel |
+| `pptx_replace` | Patche N slides par index en un appel (title / bullets / left / right) |
 
 ### Filesystem abstrait (4 outils)
 
@@ -165,7 +160,7 @@ afin que l'LLM ne chaîne plus de séquences `create + N×append + M×insert`.
 | `fs_copy` | Copie entre backends (ex: `local://` → `sp://`) |
 | `fs_delete` | Supprime un fichier |
 
-**Total cible : ~22 outils** (la doctrine "batched-by-intent" sur docx fait passer 8 tools envisagés à 6 sans perdre d'usage). Pour la V1 de démo, livrer 12 outils suffit (docx_create, docx_read, xlsx_create, xlsx_write_range, xlsx_apply_formula, pptx_create, pptx_add_slide, fs_list, fs_copy, docx_to_pdf, docx_append, docx_replace) et ajouter les autres en V2.
+**Total : 17 outils** (docx 6 + xlsx 3 + pptx 4 + fs 4). La doctrine "batched-by-intent" — appliquée aux trois formats — réduit le surface area sans perdre d'usage : chaque create accepte le contenu complet en un seul appel, et les éditions batch N opérations en un round-trip.
 
 ### Ressources MCP (pas des tools, à servir par le server)
 
@@ -482,7 +477,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 ### Phase 4 — Xlsx engine + 4 tools (2h)
 
 - `xlsx_engine.py` : wrapper `openpyxl`, invocation LibreOffice pour recalc des formules, color coding finance auto-applicable.
-- Tools : `xlsx_create`, `xlsx_read_range`, `xlsx_write_range`, `xlsx_apply_formula`.
+- Tools : `xlsx_create` (avec `sheets=[{name, writes, formulas}]` batché), `xlsx_read_range`, `xlsx_update`.
 - Ressource `office://rules/xlsx`.
 - Tests : create avec sheets, write range, apply formula avec recalc vérifié.
 - Commit : `feat(xlsx): add xlsx engine with 4 tools and formula recalc`.
@@ -491,7 +486,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 
 - `pptx_engine.py` : wrapper `python-pptx` avec thèmes (cyberpunk, corporate, minimal).
 - Templates `.pptx` dans `src/office_mcp/templates/pptx/`.
-- Tools : `pptx_create`, `pptx_add_slide`, `pptx_read`.
+- Tools : `pptx_create` (avec `slides=[…]` batché), `pptx_read`, `pptx_append`, `pptx_replace`.
 - Ressource `office://rules/pptx`.
 - Tests.
 - Commit : `feat(pptx): add pptx engine with 3 tools and themes`.
