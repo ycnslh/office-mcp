@@ -32,15 +32,16 @@ from office_mcp.tools import _locks
 
 async def pptx_create(
     file_uri: str,
+    slides: list[dict[str, Any]],
     theme: str = "corporate",
-    slides: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a complete PowerPoint deck in a single call.
 
     Use this directly. Do not call ``fs_list``, ``fs_stat`` or any other
     tool to "check OneDrive" or "see if the file exists" first — this
     tool creates or overwrites at ``file_uri`` in one step. Pass the
-    full deck via ``slides`` (ordered list of typed slide blocks).
+    full deck via ``slides`` (REQUIRED) and do NOT chain a follow-up
+    ``pptx_append``; the entire deck fits here.
 
     Slide schema — every slide carries a ``type``::
 
@@ -51,19 +52,19 @@ async def pptx_create(
 
     Args:
         file_uri: Destination URI, e.g. ``od://AI Generated/pitch.pptx``.
+        slides: REQUIRED. Ordered list of slide blocks. Pass ``[]`` only
+            when you genuinely want an empty deck (rare).
         theme: ``corporate`` (default), ``minimal``, or ``cyberpunk``.
             See ``office://rules/pptx``.
-        slides: Ordered list of slide blocks. Empty (or omitted) creates
-            an empty deck.
     """
     user = require_current_user()
     backend = get_registry().get(file_uri)
     async with _locks.for_uri(file_uri):
         payload = await asyncio.to_thread(
-            pptx_engine.compose, theme=theme, slides=slides or []
+            pptx_engine.compose, theme=theme, slides=slides
         )
         meta = await backend.write(file_uri, payload, user_ctx=user)
-    slide_count = len(slides) if slides else 0
+    slide_count = len(slides)
     return {
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,

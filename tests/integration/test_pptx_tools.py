@@ -185,4 +185,4 @@ async def test_pptx_tools_require_user_context(
     registry: StorageRegistry,
 ) -> None:
     with pytest.raises(RuntimeError, match="No UserContext bound"):
-        await pptx_create("local://x.pptx")
+        await pptx_create("local://x.pptx", slides=[])

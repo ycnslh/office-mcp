@@ -28,8 +28,8 @@ from office_mcp.utils import libreoffice
 
 async def docx_create(
     file_uri: str,
+    blocks: list[dict[str, Any]],
     title: str | None = None,
-    blocks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Create a complete Word document in a single call.
 
@@ -39,9 +39,10 @@ async def docx_create(
     ``auth_required`` on the first OneDrive touch the same way a list
     would, and normalizes bare-name URIs server-side.
 
-    Pass the entire document body as ``blocks`` — an ordered list of typed
-    content blocks — and this one call writes the finished file. Do not
-    follow up with separate append/insert calls; everything fits here.
+    Pass the entire document body as ``blocks`` (REQUIRED) — an ordered
+    list of typed content blocks — and this one call writes the
+    finished file. Do NOT follow up with ``docx_append``; everything
+    fits here.
 
     Block schema:
         ``{"type": "heading", "level": 1, "text": "..."}`` (level: 1, 2 or 3)
@@ -51,11 +52,11 @@ async def docx_create(
     Args:
         file_uri: Destination URI on the user's OneDrive, e.g.
             ``od://AI Generated/q3.docx``.
-        title: Optional document title rendered as the Word ``Title`` style
-            at the top of the document.
-        blocks: Ordered list of headings, paragraphs and tables that make
-            up the document body. Empty (or omitted) produces a doc with
-            only the title.
+        blocks: REQUIRED. Ordered list of headings, paragraphs and
+            tables that make up the document body. Pass ``[]`` only
+            when you genuinely want an empty document.
+        title: Optional document title rendered as the Word ``Title``
+            style at the top of the document.
 
     Returns:
         ``file_uri`` / ``size_bytes`` / ``etag`` / ``download_url`` and a
@@ -63,9 +64,9 @@ async def docx_create(
     """
     user = require_current_user()
     backend = get_registry().get(file_uri)
-    payload = docx_engine.compose(title=title, blocks=blocks or [])
+    payload = docx_engine.compose(title=title, blocks=blocks)
     meta = await backend.write(file_uri, payload, user_ctx=user)
-    block_count = len(blocks) if blocks else 0
+    block_count = len(blocks)
     return {
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,

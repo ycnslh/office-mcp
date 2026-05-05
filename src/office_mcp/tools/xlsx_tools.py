@@ -23,7 +23,7 @@ from office_mcp.runtime import download_url_for, get_registry
 
 async def xlsx_create(
     file_uri: str,
-    sheets: list[dict[str, Any]] | None = None,
+    sheets: list[dict[str, Any]],
     recalc: bool = True,
 ) -> dict[str, Any]:
     """Create a complete Excel workbook in a single call.
@@ -31,8 +31,9 @@ async def xlsx_create(
     Use this directly. Do not call ``fs_list``, ``fs_stat`` or any other
     tool to "check OneDrive" or "see if the file exists" first — this
     tool creates or overwrites at ``file_uri`` in one step. Pass the
-    full workbook body via ``sheets`` and let one LibreOffice recalc at
-    the end bake every formula in one pass.
+    full workbook body via ``sheets`` (REQUIRED) and let one LibreOffice
+    recalc at the end bake every formula in one pass. Do NOT follow up
+    with ``xlsx_update``; the entire workbook fits here.
 
     Sheet schema (each entry of ``sheets`` is a dict)::
 
@@ -55,8 +56,9 @@ async def xlsx_create(
 
     Args:
         file_uri: Destination URI, e.g. ``od://AI Generated/budget.xlsx``.
-        sheets: Ordered list of sheet specs. Empty (or omitted) creates
-            a single empty default sheet.
+        sheets: REQUIRED. Ordered list of sheet specs (name + writes
+            + formulas). Pass ``[]`` only when you genuinely want an
+            empty workbook with the default ``Sheet``.
         recalc: When ``True`` (default), LibreOffice computes formula
             cells once at the end so subsequent reads return values,
             not formula strings. Set ``False`` only if you intend to
@@ -68,7 +70,7 @@ async def xlsx_create(
         xlsx_engine.compose, sheets=sheets, recalc=recalc
     )
     meta = await backend.write(file_uri, payload, user_ctx=user)
-    sheet_names = [s.get("name") for s in (sheets or []) if s.get("name")]
+    sheet_names = [s.get("name") for s in sheets if s.get("name")]
     return {
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
