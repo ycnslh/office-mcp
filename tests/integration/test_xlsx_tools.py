@@ -179,4 +179,4 @@ async def test_xlsx_tools_require_user_context(
     registry: StorageRegistry,
 ) -> None:
     with pytest.raises(RuntimeError, match="No UserContext bound"):
-        await xlsx_create("local://x.xlsx")
+        await xlsx_create("local://x.xlsx", sheets=[])

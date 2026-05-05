@@ -50,7 +50,9 @@ def yacine() -> Iterator[UserContext]:
 async def test_docx_create_writes_to_storage_backend(
     registry: StorageRegistry, tmp_path: Path, yacine: UserContext
 ) -> None:
-    result = await docx_create("local://reports/q3.docx", title="Q3 report")
+    result = await docx_create(
+        "local://reports/q3.docx", blocks=[], title="Q3 report"
+    )
 
     assert result["file_uri"] == "local://reports/q3.docx"
     assert result["size_bytes"] > 0
@@ -92,7 +94,7 @@ async def test_docx_create_with_blocks_produces_full_document(
 async def test_docx_create_then_read_roundtrip(
     registry: StorageRegistry, yacine: UserContext
 ) -> None:
-    await docx_create("local://simple.docx", title="Hello world")
+    await docx_create("local://simple.docx", blocks=[], title="Hello world")
     payload = await docx_read("local://simple.docx")
 
     assert payload["file_uri"] == "local://simple.docx"
@@ -104,7 +106,7 @@ async def test_docx_create_then_read_roundtrip(
 async def test_docx_append_persists_multiple_blocks(
     registry: StorageRegistry, yacine: UserContext
 ) -> None:
-    await docx_create("local://doc.docx", title="Doc")
+    await docx_create("local://doc.docx", blocks=[], title="Doc")
 
     result = await docx_append(
         "local://doc.docx",
@@ -188,7 +190,7 @@ async def test_docx_remove_drops_targeted_section(
 async def test_docx_tools_require_user_context(registry: StorageRegistry) -> None:
     # No bind_user here — require_current_user must refuse.
     with pytest.raises(RuntimeError, match="No UserContext bound"):
-        await docx_create("local://x.docx")
+        await docx_create("local://x.docx", blocks=[])
 
 
 @pytest.mark.parametrize(
@@ -231,7 +233,7 @@ async def test_docx_to_pdf_writes_valid_pdf(
 async def test_docx_to_pdf_custom_output_uri(
     registry: StorageRegistry, tmp_path: Path, yacine: UserContext
 ) -> None:
-    await docx_create("local://in.docx", title="Hello")
+    await docx_create("local://in.docx", blocks=[], title="Hello")
 
     result = await docx_to_pdf(
         "local://in.docx", output_uri="local://out/renamed.pdf"
