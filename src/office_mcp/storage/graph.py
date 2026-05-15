@@ -319,17 +319,21 @@ class GraphBackend(StorageBackend):
             response = await self._client.request(method, url, **request_kwargs)
             if response.status_code != 423:
                 return response
-            if idx == 0 and token is not None:
-                # Probe once on the first 423. Subsequent retries don't
-                # re-probe — if it was transient on the first check it
-                # stays transient.
-                if await self._is_external_lock(uri, token, response):
-                    raise BackendUnavailableError(
-                        f"{uri} is currently open in Word Online, OneDrive "
-                        f"desktop, or another Office client (coauthoring "
-                        f"lock). Close the open editor session and retry — "
-                        f"the server cannot release this lock for you."
-                    )
+            # Probe once on the first 423. Subsequent retries don't
+            # re-probe — if it was transient on the first check it stays
+            # transient. Short-circuits when either condition before the
+            # await is false, so the GET only fires when really needed.
+            if (
+                idx == 0
+                and token is not None
+                and await self._is_external_lock(uri, token, response)
+            ):
+                raise BackendUnavailableError(
+                    f"{uri} is currently open in Word Online, OneDrive "
+                    f"desktop, or another Office client (coauthoring "
+                    f"lock). Close the open editor session and retry — "
+                    f"the server cannot release this lock for you."
+                )
             if idx == last_idx:
                 # Retry budget exhausted — surface the final 423 to the
                 # caller so ``_raise_for_status`` turns it into the
