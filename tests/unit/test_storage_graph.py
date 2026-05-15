@@ -9,6 +9,7 @@ office-mcp errors.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,12 @@ from office_mcp.utils.errors import (
 
 def _user(token: str | None) -> UserContext:
     return UserContext(user_id="demo-user", on_behalf_of_token=token)
+
+
+def _iso_age(seconds_ago: float) -> str:
+    """ISO-8601 ``Z`` timestamp this many seconds in the past."""
+    ts = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    return ts.isoformat().replace("+00:00", "Z")
 
 
 @pytest_asyncio.fixture
@@ -255,11 +262,23 @@ async def test_write_retries_through_brief_resource_lock(
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
-    # Two 423s, then a 200 — the call must succeed.
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
         method="PUT",
         status_code=423,
+    )
+    # After the first 423 the backend probes the file's lastModifiedDateTime
+    # to distinguish the brief post-write lock (this case) from an external
+    # coauthoring lock — a fresh modification means "transient, keep retrying".
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(5),  # 5 s ago = fresh write
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
     )
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
@@ -280,8 +299,8 @@ async def test_write_retries_through_brief_resource_lock(
     meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
     assert meta.etag == '"new"'
-    # The single user-visible operation made three HTTP calls.
-    assert len(httpx_mock.get_requests()) == 3
+    # 3 PUTs + 1 diagnostic GET = 4 HTTP calls.
+    assert len(httpx_mock.get_requests()) == 4
 
 
 @pytest.mark.asyncio
@@ -299,9 +318,91 @@ async def test_write_surfaces_unavailable_when_lock_persists(
             method="PUT",
             status_code=423,
         )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(5),  # fresh → classified transient
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
 
     with pytest.raises(BackendUnavailableError, match="still indexing"):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_write_short_circuits_on_external_coauthoring_lock(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 423 on a file modified several minutes ago can only come from
+    an external coauthoring session (Word Online, OneDrive desktop) —
+    no server-side retry will release it. We bail out fast with an
+    actionable message instead of burning the retry budget for nothing.
+    """
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        status_code=423,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(600),  # 10 min old → external
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+    with pytest.raises(BackendUnavailableError, match="Word Online"):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    # Exactly one PUT + one diagnostic GET — no further retry attempted.
+    assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.asyncio
+async def test_write_falls_back_to_retry_when_lock_probe_fails(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing classifier probe (404, network blip, malformed JSON)
+    must not break the normal retry path — we just fall back to the
+    transient assumption."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        status_code=423,
+    )
+    # Probe 404s — could happen if the URI just got deleted out from
+    # under us. Classifier returns "transient" and the retry continues.
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        status_code=404,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        method="PUT",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+            "eTag": '"new"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+    meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+    assert meta.etag == '"new"'
 
 
 @pytest.mark.asyncio
@@ -525,11 +626,22 @@ async def test_delete_retries_through_brief_resource_lock(
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
-    # Two 423s, then a 204 — the call must succeed transparently.
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
         method="DELETE",
         status_code=423,
+    )
+    # Diagnostic probe after the first 423 — fresh mtime keeps the
+    # classification "transient" so the retry loop continues.
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(5),
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
     )
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
@@ -543,7 +655,8 @@ async def test_delete_retries_through_brief_resource_lock(
     )
 
     await backend.delete("od://q.docx", user_ctx=_user("AT"))
-    assert len(httpx_mock.get_requests()) == 3
+    # 3 DELETEs + 1 diagnostic GET = 4 HTTP calls.
+    assert len(httpx_mock.get_requests()) == 4
 
 
 @pytest.mark.asyncio
@@ -559,9 +672,52 @@ async def test_delete_surfaces_unavailable_when_lock_persists(
             method="DELETE",
             status_code=423,
         )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(5),  # fresh → transient
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
 
     with pytest.raises(BackendUnavailableError, match="still indexing"):
         await backend.delete("od://q.docx", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_delete_short_circuits_on_external_coauthoring_lock(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user's open Word Online tab on the file we're trying to
+    delete holds the lock. Server-side retry can't help — fail fast
+    with the actionable message so the LLM tells the user what to do.
+    """
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="DELETE",
+        status_code=423,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(600),  # 10 min → external
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+    with pytest.raises(BackendUnavailableError, match="Word Online"):
+        await backend.delete("od://q.docx", user_ctx=_user("AT"))
+
+    assert len(httpx_mock.get_requests()) == 2
 
 
 # ── list (recursive BFS) ───────────────────────────────────────────────

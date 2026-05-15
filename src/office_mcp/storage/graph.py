@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -44,6 +45,20 @@ from office_mcp.utils.errors import (
 
 log = structlog.get_logger(__name__)
 
+
+def _extract_bearer(headers: Any) -> str | None:
+    """Pull the bearer token out of an Authorization header dict.
+
+    Used to keep the diagnostic GET in ``_retry_on_423`` self-contained
+    without changing the signature of every caller.
+    """
+    if not isinstance(headers, dict):
+        return None
+    auth = headers.get("Authorization")
+    if not isinstance(auth, str) or not auth.startswith("Bearer "):
+        return None
+    return auth.removeprefix("Bearer ").strip() or None
+
 _SCHEME = "od"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=5.0)
@@ -62,6 +77,15 @@ _MAX_SIMPLE_PUT_BYTES = 4 * 1024 * 1024
 #: cumulative ~31 s window stays well under LibreChat's 120 s MCP
 #: tool timeout while covering most real lock durations.
 _RETRY_LOCKED_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
+
+#: A 423 on a file whose ``lastModifiedDateTime`` is older than this
+#: cannot be the post-write indexing lock (that window is tens of
+#: seconds at worst). The remaining cause is an external coauthoring
+#: session — Word Online, OneDrive desktop, Office Mobile — holding
+#: an exclusive handle. No amount of server-side retry will clear it:
+#: we short-circuit with an actionable message instead of burning the
+#: 31 s retry budget for nothing.
+_EXTERNAL_LOCK_AGE_S: float = 90.0
 
 
 class GraphBackend(StorageBackend):
@@ -269,27 +293,105 @@ class GraphBackend(StorageBackend):
     ) -> httpx.Response:
         """Issue a Graph request, retrying through the brief 423 lock window.
 
-        OneDrive/SharePoint locks an Office file for a few seconds
-        after each write while it propagates and any open Office Online
-        preview lets go. The lock returns HTTP 423 ``resourceLocked``;
-        a small bounded retry transparently waits it out instead of
-        bubbling a confusing error up to the LLM, which would otherwise
-        clone the file and rename it (we observed that with MiniMax in
-        production).
+        Two distinct lock conditions surface as HTTP 423 from Graph:
+
+        1. **Transient post-write lock** — SharePoint runs AV scan and
+           preview generation after every successful write. Lasts tens
+           of seconds; absorbed transparently via the retry schedule.
+        2. **External coauthoring lock** — Word Online, OneDrive
+           desktop, or Office Mobile holds an exclusive handle on the
+           file. Lasts as long as the external session stays open
+           (minutes to hours). No server-side retry will release it.
+
+        On the first 423 we probe the file's ``lastModifiedDateTime``
+        to distinguish the two: a file modified seconds ago is in (1),
+        a file modified minutes ago and still 423-ing is in (2). For
+        (2) we short-circuit with an actionable error so the LLM
+        relays the real fix ("close the open Word tab") instead of
+        wasting the retry budget.
         """
-        for delay in (0.0, *_RETRY_LOCKED_DELAYS_S):
+        response: httpx.Response | None = None
+        token = _extract_bearer(request_kwargs.get("headers"))
+        for idx, delay in enumerate((0.0, *_RETRY_LOCKED_DELAYS_S)):
             if delay:
                 await asyncio.sleep(delay)
             response = await self._client.request(method, url, **request_kwargs)
             if response.status_code != 423:
                 return response
+            if idx == 0 and token is not None:
+                # Probe once on the first 423. Subsequent retries don't
+                # re-probe — if it was transient on the first check it
+                # stays transient.
+                if await self._is_external_lock(uri, token, response):
+                    raise BackendUnavailableError(
+                        f"{uri} is currently open in Word Online, OneDrive "
+                        f"desktop, or another Office client (coauthoring "
+                        f"lock). Close the open editor session and retry — "
+                        f"the server cannot release this lock for you."
+                    )
             log.info(
                 "graph.resource_locked.retry",
                 uri=uri,
                 method=method,
                 next_delay_s=delay,
             )
+        assert response is not None  # loop runs at least once
         return response
+
+    async def _is_external_lock(
+        self,
+        uri: str,
+        token: str,
+        triggering_response: httpx.Response,
+    ) -> bool:
+        """Classify a 423 as external (coauthoring) vs transient (post-write).
+
+        Heuristic: fetch the driveItem and inspect
+        ``lastModifiedDateTime``. If the file was modified more than
+        ``_EXTERNAL_LOCK_AGE_S`` seconds ago, the post-write window has
+        long passed — the only remaining cause for a 423 is an external
+        lock. Anything younger gets classified as transient (retry).
+
+        Probe failures (404, network blip, malformed payload) fall back
+        to "transient" so we don't break the normal retry path on a
+        flaky lookup.
+        """
+        try:
+            path = self._path_from_uri(uri)
+        except (InvalidUriError, PathTraversalError):
+            return False
+        try:
+            probe = await self._client.get(
+                self._drive_url(path),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.RequestError:
+            return False
+        if probe.status_code != 200:
+            return False
+        try:
+            payload = probe.json()
+        except ValueError:
+            return False
+        modified_raw = payload.get("lastModifiedDateTime")
+        if not isinstance(modified_raw, str):
+            return False
+        try:
+            modified_at = datetime.fromisoformat(
+                modified_raw.replace("Z", "+00:00")
+            )
+        except ValueError:
+            return False
+        age_s = (datetime.now(timezone.utc) - modified_at).total_seconds()
+        if age_s <= _EXTERNAL_LOCK_AGE_S:
+            return False
+        log.info(
+            "graph.resource_locked.external_classified",
+            uri=uri,
+            modified_age_s=age_s,
+            response_body=triggering_response.text[:300],
+        )
+        return True
 
     async def stat(self, uri: str, *, user_ctx: UserContext) -> FileMetadata:
         token = self._require_token(user_ctx)
