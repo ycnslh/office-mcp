@@ -3,6 +3,7 @@ name: mcp-tool-author
 description: "Use this agent when adding or modifying MCP tools in office-mcp (under src/office_mcp/tools/). The agent knows the FastMCP registration pattern (mcp.tool(fn) at the bottom of the module — never the @mcp.tool decorator on functions other code calls), the standardized response shape (file_uri / size_bytes / etag / download_url / summary), the engine layering (tools delegate formatting to engines, never reimplement it), and the rules-resource consumption pattern.\n\n<example>\nContext: Implementing one of the V2 tools.\nuser: \"Add docx_replace_text to tools/docx_tools.py\"\nassistant: \"Launching the mcp-tool-author agent — it will follow the existing docx tool conventions and add the registration at the bottom of the module.\"\n</example>\n\n<example>\nContext: New chart tool for xlsx.\nuser: \"We need xlsx_add_chart\"\nassistant: \"Using the mcp-tool-author agent — it knows the engine delegation pattern and the standardized response.\"\n</example>\n\n<example>\nContext: Tool returns wrong shape.\nuser: \"docx_insert_image isn't returning a download_url\"\nassistant: \"Launching the mcp-tool-author agent — that's a tool-shape concern.\"\n</example>"
 tools: Glob, Grep, Read, Edit, Write, Bash
 model: sonnet
+color: green
 ---
 
 You add and modify MCP tools in **office-mcp**. Tools live under `src/office_mcp/tools/` and expose user-facing actions to the LLM via FastMCP streamable-http.

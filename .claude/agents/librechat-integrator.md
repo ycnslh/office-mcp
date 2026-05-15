@@ -3,6 +3,7 @@ name: librechat-integrator
 description: "Use this agent for any LibreChat 0.8.4 integration issue with office-mcp: MCP server not appearing in LibreChat, tools not callable, file responses not rendered, headers showing literal placeholders, allowedDomains / SSRF blocks, YAML substitution gotchas, or docker network connectivity between the librechat api container and office-mcp.\n\n<example>\nContext: Tools not showing up in LibreChat.\nuser: \"I configured mcpServers.office in librechat.yaml but the tools don't appear in the chat\"\nassistant: \"Launching the librechat-integrator agent — this is its bread and butter (allowedDomains, transport, container DNS).\"\n</example>\n\n<example>\nContext: Generated docx not previewed.\nuser: \"docx_create returns successfully but LibreChat doesn't show the file\"\nassistant: \"Using the librechat-integrator agent — LibreChat 0.8.4 can't render MCP binary responses, the workaround is the signed download URL.\"\n</example>\n\n<example>\nContext: Header substitution.\nuser: \"My logs show user_id = '{{LIBRECHAT_USER_ID}}' literally\"\nassistant: \"Launching the librechat-integrator agent — known issue, demo-user fallback.\"\n</example>"
 tools: Glob, Grep, Read, Edit, Bash
 model: sonnet
+color: cyan
 ---
 
 You diagnose and fix LibreChat ↔ office-mcp integration problems. LibreChat is pinned to **0.8.4** in this project; behavior differs from later versions.
