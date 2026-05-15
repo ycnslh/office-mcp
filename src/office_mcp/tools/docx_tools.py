@@ -71,7 +71,7 @@ async def docx_create(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "summary": (
             f"Created document at {meta.uri}"
             + (f" with title {title!r}" if title else "")
@@ -128,7 +128,7 @@ async def docx_append(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "summary": f"Appended {len(blocks)} block(s) to {meta.uri}",
     }
 
@@ -158,7 +158,7 @@ async def docx_replace(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "replacements_made": count,
         "summary": (
             f"Applied {len(replacements)} replacement rule(s), "
@@ -193,7 +193,7 @@ async def docx_remove(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "sections_removed": removed,
         "summary": (
             f"Removed {removed}/{len(headings)} section(s) from {meta.uri}"
@@ -232,7 +232,7 @@ async def docx_to_pdf(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "summary": (
             f"Rendered {file_uri} → {meta.uri} ({meta.size_bytes} bytes)"
         ),

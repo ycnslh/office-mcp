@@ -528,6 +528,49 @@ class GraphBackend(StorageBackend):
         )
         self._raise_for_status(response, uri)
 
+    async def preview_url(self, uri: str, *, user_ctx: UserContext) -> str | None:
+        """Return a read-only Office for the web URL via Graph's ``/preview``.
+
+        ``POST /me/drive/root:/<path>:/preview`` returns ``{"getUrl": ...}``
+        — a long-lived URL that opens the document in Word/Excel/PowerPoint
+        for the web in **read-only** mode. Read-only sessions do not
+        acquire a WOPI write lock, so handing this URL to the user does
+        NOT block subsequent server-side edits (the way ``meta.web_url``,
+        which is the *edit* URL, does).
+
+        If the user wants to switch to edit mode they can click "Edit
+        Document" inside the viewer — that acquires the lock and our
+        edits are blocked until they close the tab. Documented limitation.
+
+        Returns ``None`` on any failure (no token, parse error, Graph
+        non-200) so callers can fall back to a signed download URL.
+        """
+        token = user_ctx.on_behalf_of_token
+        if not token:
+            return None
+        try:
+            path = self._path_from_uri(uri)
+        except (InvalidUriError, PathTraversalError):
+            return None
+        try:
+            response = await self._client.post(
+                self._drive_url(path, suffix="preview"),
+                json={},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        except httpx.RequestError:
+            return None
+        if response.status_code != 200:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        get_url = payload.get("getUrl")
+        if isinstance(get_url, str) and get_url:
+            return get_url
+        return None
+
     async def health_check(self) -> str:
         # /v1.0/$metadata is anonymous and confirms Graph is reachable.
         # We don't have a user token at health-check time (it's a

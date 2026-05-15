@@ -75,7 +75,7 @@ async def xlsx_create(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "sheets": sheet_names,
         "recalculated": recalc,
         "summary": (
@@ -147,7 +147,7 @@ async def xlsx_update(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "recalculated": recalc and formula_count > 0,
         "summary": (
             f"Applied {write_count} write(s) and {formula_count} formula(s) "
