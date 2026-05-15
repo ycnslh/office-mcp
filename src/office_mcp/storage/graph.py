@@ -62,9 +62,14 @@ def _extract_bearer(headers: Any) -> str | None:
 _SCHEME = "od"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=5.0)
-#: Graph rejects PUT to ``:/content`` past this size. Larger files need
-#: an upload session, which we'll wire in a follow-up phase.
-_MAX_SIMPLE_PUT_BYTES = 4 * 1024 * 1024
+
+#: Cap on single-shot upload-session uploads. Microsoft documents
+#: 60 MiB as the max for a single ``Content-Range`` PUT against an
+#: ``uploadUrl``; beyond that we'd need to split the bytes across
+#: multiple ranged PUTs (TODO when a real use case lands). Until then
+#: anything over the cap is rejected at the API boundary with a clear
+#: error rather than a vague "Request entity too large" from Graph.
+_MAX_UPLOAD_SESSION_BYTES = 60 * 1024 * 1024
 
 #: Microsoft Graph briefly locks an Office file after a write while
 #: SharePoint propagates and any open Office Online preview releases
@@ -250,6 +255,21 @@ class GraphBackend(StorageBackend):
         user_ctx: UserContext,
         if_match: str | None = None,
     ) -> FileMetadata:
+        """Write via the Graph upload-session API.
+
+        We deliberately use ``POST /createUploadSession`` + a ranged
+        ``PUT`` to the returned ``uploadUrl`` *even for tiny files*.
+        The simple ``PUT /me/drive/root:/<path>:/content`` endpoint
+        races against Office for the web: if the user has the same
+        file open in Word Online, every simple-PUT returns HTTP 423
+        for the entire duration of the WOPI coauthoring session.
+
+        The upload-session API takes the WOPI-aware code path on
+        Microsoft's side and is the official way to push bytes into a
+        file that may be concurrently open in Office. Trades 1 extra
+        roundtrip (the session creation) for not failing when the
+        user is looking at the file.
+        """
         # Order matches read/stat/delete: token check, then URI parse,
         # then size check. Keeps the error class surfaced for an
         # unauthenticated bad-URI call consistent across operations.
@@ -262,27 +282,67 @@ class GraphBackend(StorageBackend):
                 effective_uri=effective_uri,
             )
         path = self._path_from_uri(effective_uri)
-        if len(data) > _MAX_SIMPLE_PUT_BYTES:
+        size = len(data)
+        if size == 0:
+            # The ``Content-Range`` header for a 0-byte upload would be
+            # ``bytes 0--1/0`` which Graph rejects. We never expect a
+            # legitimate zero-byte write from the engines (even an
+            # empty .docx is several KB), so fail closed at the API
+            # boundary with a clear cause.
             raise BackendUnavailableError(
-                f"file size {len(data)} exceeds simple-PUT cap "
-                f"({_MAX_SIMPLE_PUT_BYTES} bytes); upload sessions not yet wired"
+                f"refusing to upload zero bytes to {effective_uri}"
             )
-        url = self._drive_url(path, suffix="content")
-        headers: dict[str, str] = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/octet-stream",
+        if size > _MAX_UPLOAD_SESSION_BYTES:
+            raise BackendUnavailableError(
+                f"file size {size} exceeds single-shot upload-session "
+                f"cap ({_MAX_UPLOAD_SESSION_BYTES} bytes); chunked upload "
+                f"not yet wired"
+            )
+
+        # Step 1 — open the upload session. Still wrapped in _retry_on_423
+        # because Graph can occasionally 423 the session-create endpoint
+        # itself; the same classifier triggers if it's a coauthoring lock.
+        session_url = self._drive_url(path, suffix="createUploadSession")
+        session_body: dict[str, Any] = {
+            "item": {
+                # "replace" matches the previous simple-PUT semantics.
+                # The upload-session call doesn't honor ``If-Match``
+                # itself — we apply it on the final ranged PUT below.
+                "@microsoft.graph.conflictBehavior": "replace",
+                "name": path.split("/")[-1],
+            },
+        }
+        session_response = await self._retry_on_423(
+            "POST",
+            session_url,
+            effective_uri,
+            json=session_body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        self._raise_for_status(session_response, effective_uri)
+        upload_url = session_response.json().get("uploadUrl")
+        if not isinstance(upload_url, str) or not upload_url:
+            raise BackendUnavailableError(
+                f"Graph createUploadSession for {effective_uri} returned "
+                f"no uploadUrl"
+            )
+
+        # Step 2 — single-shot ranged PUT to the pre-signed uploadUrl.
+        # CRITICAL: the uploadUrl is pre-signed; do NOT add an
+        # Authorization header (Microsoft docs explicitly forbid it).
+        upload_headers: dict[str, str] = {
+            "Content-Length": str(size),
+            "Content-Range": f"bytes 0-{size - 1}/{size}",
         }
         if if_match is not None:
-            headers["If-Match"] = if_match
-        response = await self._retry_on_423(
-            "PUT",
-            url,
-            effective_uri,
+            upload_headers["If-Match"] = if_match
+        upload_response = await self._client.put(
+            upload_url,
             content=data,
-            headers=headers,
+            headers=upload_headers,
         )
-        self._raise_for_status(response, effective_uri)
-        return self._to_metadata(effective_uri, response.json())
+        self._raise_for_status(upload_response, effective_uri)
+        return self._to_metadata(effective_uri, upload_response.json())
 
     async def _retry_on_423(
         self,

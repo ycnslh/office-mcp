@@ -38,6 +38,46 @@ def _iso_age(seconds_ago: float) -> str:
     return ts.isoformat().replace("+00:00", "Z")
 
 
+#: Fixed pre-signed upload URL used by ``test_write_*`` mocks.
+#: Production gets a fresh per-request URL from Graph; for tests a
+#: stable value lets pytest-httpx match the second-leg PUT exactly.
+_TEST_UPLOAD_URL = "https://upload.example/token-abc"
+
+
+def _mock_upload_session_ok(
+    httpx_mock: HTTPXMock,
+    path: str,
+    *,
+    final_json: dict[str, object] | None = None,
+    final_status: int = 201,
+) -> None:
+    """Register the happy-path two-step upload-session flow.
+
+    Tests that only need a successful write can call this once and
+    forget about the protocol shape.
+    """
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/{path}:/createUploadSession",
+        method="POST",
+        json={
+            "uploadUrl": _TEST_UPLOAD_URL,
+            "expirationDateTime": "2099-01-01T00:00:00Z",
+        },
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="PUT",
+        status_code=final_status,
+        json=final_json
+        or {
+            "size": 1,
+            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+            "eTag": '"e"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+
 @pytest_asyncio.fixture
 async def backend() -> AsyncIterator[GraphBackend]:
     instance = GraphBackend()
@@ -159,10 +199,10 @@ async def test_read_401_raises_auth_required(
 async def test_write_returns_metadata_with_etag(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        json={
+    _mock_upload_session_ok(
+        httpx_mock,
+        "q.docx",
+        final_json={
             "size": 11,
             "lastModifiedDateTime": "2026-04-29T10:00:00Z",
             "eTag": '"{abc-123},1"',
@@ -176,10 +216,18 @@ async def test_write_returns_metadata_with_etag(
 
     assert meta.size_bytes == 11
     assert meta.etag == '"{abc-123},1"'
-    request = httpx_mock.get_requests()[-1]
-    assert request.headers["Authorization"] == "Bearer AT"
-    assert request.headers["Content-Type"] == "application/octet-stream"
-    assert request.read() == b"hello world"
+
+    create_req, upload_req = httpx_mock.get_requests()
+    # Session-create call carries the bearer; the upload URL is
+    # pre-signed so the chunk PUT must NOT include Authorization
+    # (Microsoft Graph docs are explicit about this).
+    assert create_req.method == "POST"
+    assert create_req.headers["Authorization"] == "Bearer AT"
+    assert upload_req.method == "PUT"
+    assert "authorization" not in {k.lower() for k in upload_req.headers}
+    assert upload_req.headers["Content-Length"] == "11"
+    assert upload_req.headers["Content-Range"] == "bytes 0-10/11"
+    assert upload_req.read() == b"hello world"
 
 
 @pytest.mark.asyncio
@@ -189,10 +237,10 @@ async def test_write_prefers_etag_over_ctag(
     """Optimistic concurrency uses ``eTag`` (item-wide), not ``cTag``
     (content-only). Locks the contract so a refactor can't silently
     switch which header drives ``If-Match``."""
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        json={
+    _mock_upload_session_ok(
+        httpx_mock,
+        "q.docx",
+        final_json={
             "size": 1,
             "lastModifiedDateTime": "2026-04-29T10:00:00Z",
             "eTag": '"correct"',
@@ -210,16 +258,10 @@ async def test_write_prefers_etag_over_ctag(
 async def test_write_with_if_match_attaches_header(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        json={
-            "size": 1,
-            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
-            "eTag": '"new-etag"',
-            "file": {"mimeType": "text/plain"},
-        },
-    )
+    """``If-Match`` rides the final ranged PUT, not the
+    ``createUploadSession`` POST — that's where Graph evaluates the
+    precondition for the actual content swap."""
+    _mock_upload_session_ok(httpx_mock, "q.docx")
 
     await backend.write(
         "od://q.docx",
@@ -228,16 +270,26 @@ async def test_write_with_if_match_attaches_header(
         if_match='"old-etag"',
     )
 
-    request = httpx_mock.get_requests()[-1]
-    assert request.headers["If-Match"] == '"old-etag"'
+    create_req, upload_req = httpx_mock.get_requests()
+    assert "If-Match" not in create_req.headers
+    assert upload_req.headers["If-Match"] == '"old-etag"'
 
 
 @pytest.mark.asyncio
 async def test_write_412_raises_precondition_failed(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
+    """412 from the upload-URL PUT (stale If-Match) must surface as
+    ``PreconditionFailedError`` — the optimistic-concurrency contract
+    stays identical across the simple-PUT and upload-session paths.
+    """
     httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession",
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
         method="PUT",
         status_code=412,
     )
@@ -254,39 +306,38 @@ async def test_write_412_raises_precondition_failed(
 async def test_write_retries_through_brief_resource_lock(
     backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """OneDrive locks an Office file for ~seconds after a write while
-    SharePoint propagates. We swallow the 423 transparently rather
-    than asking the LLM to recover (it does poorly — observed in
-    production with MiniMax cloning the file under a v2 name)."""
+    """OneDrive can briefly 423 the ``createUploadSession`` POST too,
+    when SharePoint is still propagating a recent change. The retry
+    helper absorbs that the same way it did for simple-PUT, so the LLM
+    never sees a transient lock as a hard failure (it would otherwise
+    clone the file under a v2 name — observed in production)."""
     # Speed up the test by collapsing the backoff schedule.
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        status_code=423,
-    )
-    # After the first 423 the backend probes the file's lastModifiedDateTime
-    # to distinguish the brief post-write lock (this case) from an external
-    # coauthoring lock — a fresh modification means "transient, keep retrying".
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
+    httpx_mock.add_response(url=create_url, method="POST", status_code=423)
+    # After the first 423 the backend probes lastModifiedDateTime to
+    # distinguish the brief post-write lock (this case) from an external
+    # coauthoring lock — fresh mtime means "transient, keep retrying".
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
         method="GET",
         json={
             "size": 1,
-            "lastModifiedDateTime": _iso_age(5),  # 5 s ago = fresh write
+            "lastModifiedDateTime": _iso_age(5),
             "eTag": '"old"',
             "file": {"mimeType": "application/octet-stream"},
         },
     )
+    httpx_mock.add_response(url=create_url, method="POST", status_code=423)
     httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        status_code=423,
+        url=create_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
     )
     httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        url=_TEST_UPLOAD_URL,
         method="PUT",
         json={
             "size": 1,
@@ -299,8 +350,8 @@ async def test_write_retries_through_brief_resource_lock(
     meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
     assert meta.etag == '"new"'
-    # 3 PUTs + 1 diagnostic GET = 4 HTTP calls.
-    assert len(httpx_mock.get_requests()) == 4
+    # 3 POSTs + 1 diagnostic GET + 1 final PUT = 5 HTTP calls.
+    assert len(httpx_mock.get_requests()) == 5
 
 
 @pytest.mark.asyncio
@@ -312,18 +363,15 @@ async def test_write_surfaces_unavailable_when_lock_persists(
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
     for _ in range(3):  # initial + 2 retries
-        httpx_mock.add_response(
-            url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-            method="PUT",
-            status_code=423,
-        )
+        httpx_mock.add_response(url=create_url, method="POST", status_code=423)
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
         method="GET",
         json={
             "size": 1,
-            "lastModifiedDateTime": _iso_age(5),  # fresh → classified transient
+            "lastModifiedDateTime": _iso_age(5),
             "eTag": '"old"',
             "file": {"mimeType": "application/octet-stream"},
         },
@@ -341,13 +389,17 @@ async def test_write_short_circuits_on_external_coauthoring_lock(
     an external coauthoring session (Word Online, OneDrive desktop) —
     no server-side retry will release it. We bail out fast with an
     actionable message instead of burning the retry budget for nothing.
+
+    Upload-session is supposed to coexist with WOPI sessions; in
+    practice we still keep this safety net for the rare cases where
+    Graph rejects the session create itself.
     """
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
     httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession",
+        method="POST",
         status_code=423,
     )
     httpx_mock.add_response(
@@ -355,7 +407,7 @@ async def test_write_short_circuits_on_external_coauthoring_lock(
         method="GET",
         json={
             "size": 1,
-            "lastModifiedDateTime": _iso_age(600),  # 10 min old → external
+            "lastModifiedDateTime": _iso_age(600),
             "eTag": '"old"',
             "file": {"mimeType": "application/octet-stream"},
         },
@@ -364,7 +416,6 @@ async def test_write_short_circuits_on_external_coauthoring_lock(
     with pytest.raises(BackendUnavailableError, match="Word Online"):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
-    # Exactly one PUT + one diagnostic GET — no further retry attempted.
     assert len(httpx_mock.get_requests()) == 2
 
 
@@ -378,20 +429,20 @@ async def test_write_falls_back_to_retry_when_lock_probe_fails(
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        status_code=423,
-    )
-    # Probe 404s — could happen if the URI just got deleted out from
-    # under us. Classifier returns "transient" and the retry continues.
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
+    httpx_mock.add_response(url=create_url, method="POST", status_code=423)
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
         method="GET",
         status_code=404,
     )
     httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
+        url=create_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
         method="PUT",
         json={
             "size": 1,
@@ -406,10 +457,21 @@ async def test_write_falls_back_to_retry_when_lock_probe_fails(
 
 
 @pytest.mark.asyncio
-async def test_write_rejects_files_above_simple_put_cap(
+async def test_write_rejects_zero_byte_uploads(backend: GraphBackend) -> None:
+    """Graph rejects ``Content-Range: bytes 0--1/0`` and so do many
+    intermediaries; we never expect a real zero-byte write from the
+    engines, so fail closed at the API boundary."""
+    with pytest.raises(BackendUnavailableError, match="zero bytes"):
+        await backend.write("od://empty.docx", b"", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_write_rejects_files_above_upload_session_cap(
     backend: GraphBackend,
 ) -> None:
-    big = b"x" * (4 * 1024 * 1024 + 1)
+    """Single-shot upload-session caps at 60 MiB. Beyond that we'd need
+    chunked uploads — out of scope until a real use case lands."""
+    big = b"x" * (60 * 1024 * 1024 + 1)
     with pytest.raises(BackendUnavailableError, match="cap"):
         await backend.write("od://big.bin", big, user_ctx=_user("AT"))
 
@@ -418,12 +480,19 @@ async def test_write_rejects_files_above_simple_put_cap(
 async def test_write_encodes_path_segments(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
-    """File names with spaces or accents must reach Graph URL-encoded."""
+    """File names with spaces or accents must reach Graph URL-encoded
+    on the session-create POST (the upload URL is opaque after that)."""
     expected_url = (
-        f"{_GRAPH_BASE}/me/drive/root:/My%20Docs/r%C3%A9sum%C3%A9.docx:/content"
+        f"{_GRAPH_BASE}/me/drive/root:"
+        f"/My%20Docs/r%C3%A9sum%C3%A9.docx:/createUploadSession"
     )
     httpx_mock.add_response(
         url=expected_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
         method="PUT",
         json={
             "size": 1,
@@ -435,8 +504,6 @@ async def test_write_encodes_path_segments(
     await backend.write(
         "od://My Docs/résumé.docx", b"x", user_ctx=_user("AT")
     )
-    # If the URL didn't match the registered mock, pytest-httpx would
-    # have raised; reaching here is the assertion.
 
 
 # ── default-folder normalization (writes only) ────────────────────────
@@ -451,10 +518,10 @@ async def test_write_rewrites_bare_uri_into_default_folder(
     up in a predictable place."""
     backend = GraphBackend(default_folder="AI Generated")
     try:
-        httpx_mock.add_response(
-            url=f"{_GRAPH_BASE}/me/drive/root:/AI%20Generated/foo.docx:/content",
-            method="PUT",
-            json={
+        _mock_upload_session_ok(
+            httpx_mock,
+            "AI%20Generated/foo.docx",
+            final_json={
                 "size": 1,
                 "lastModifiedDateTime": "2026-04-29T10:00:00Z",
                 "eTag": '"e"',
@@ -481,16 +548,7 @@ async def test_write_passes_explicit_folder_through_unchanged(
     names trigger normalization."""
     backend = GraphBackend(default_folder="AI Generated")
     try:
-        httpx_mock.add_response(
-            url=f"{_GRAPH_BASE}/me/drive/root:/Documents/q3.docx:/content",
-            method="PUT",
-            json={
-                "size": 1,
-                "lastModifiedDateTime": "2026-04-29T10:00:00Z",
-                "eTag": '"e"',
-                "file": {"mimeType": "application/octet-stream"},
-            },
-        )
+        _mock_upload_session_ok(httpx_mock, "Documents/q3.docx")
 
         meta = await backend.write(
             "od://Documents/q3.docx", b"x", user_ctx=_user("AT")
@@ -508,16 +566,7 @@ async def test_write_default_folder_disabled_keeps_root_writes(
     """Operators can opt out by passing an empty default_folder."""
     backend = GraphBackend(default_folder="")
     try:
-        httpx_mock.add_response(
-            url=f"{_GRAPH_BASE}/me/drive/root:/foo.docx:/content",
-            method="PUT",
-            json={
-                "size": 1,
-                "lastModifiedDateTime": "2026-04-29T10:00:00Z",
-                "eTag": '"e"',
-                "file": {"mimeType": "application/octet-stream"},
-            },
-        )
+        _mock_upload_session_ok(httpx_mock, "foo.docx")
 
         meta = await backend.write(
             "od://foo.docx", b"x", user_ctx=_user("AT")
@@ -532,10 +581,10 @@ async def test_write_default_folder_disabled_keeps_root_writes(
 async def test_write_captures_web_url_when_present(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/content",
-        method="PUT",
-        json={
+    _mock_upload_session_ok(
+        httpx_mock,
+        "q.docx",
+        final_json={
             "size": 1,
             "lastModifiedDateTime": "2026-04-29T10:00:00Z",
             "eTag": '"e"',
@@ -914,10 +963,11 @@ async def test_507_surfaces_quota_message(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
     """OneDrive quota exhaustion is permanent until freed — clearer
-    than the generic "backend unavailable" string."""
+    than the generic "backend unavailable" string. 507 now surfaces
+    on the upload-session POST since that's our first write contact."""
     httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/big.bin:/content",
-        method="PUT",
+        url=f"{_GRAPH_BASE}/me/drive/root:/big.bin:/createUploadSession",
+        method="POST",
         status_code=507,
     )
     with pytest.raises(BackendUnavailableError, match="quota"):
