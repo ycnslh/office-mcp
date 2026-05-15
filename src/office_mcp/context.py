@@ -84,9 +84,16 @@ def _build_from_http() -> tuple[UserContext, str | None] | None:
 
     user_id = raw_user if _looks_like_real_id(raw_user) else _DEFAULT_USER_ID
     email = raw_email if _looks_like_real_id(raw_email) else None
-    access_token = _extract_user_bearer(
-        headers.get("x-user-authorization") or ""
-    ) or _lookup_session_token(session_id)
+    access_token = (
+        _extract_user_bearer(headers.get("x-user-authorization") or "")
+        or _lookup_session_token(session_id)
+        # Cross-transport fallback: when LibreChat opens a fresh MCP
+        # transport (we observed two ``Created new transport`` events
+        # in the same chat), the session lookup misses but the user is
+        # the same. Match on UPN so we re-use the existing token and
+        # avoid an unnecessary re-auth prompt.
+        or _lookup_user_token(session_id, email)
+    )
 
     return (
         UserContext(
@@ -130,6 +137,34 @@ def _lookup_session_token(session_id: str | None) -> str | None:
     entry = store.get_token_for_session(session_id)
     if entry is None or entry.is_expired():
         return None
+    return entry.access_token
+
+
+def _lookup_user_token(session_id: str | None, email: str | None) -> str | None:
+    """Find an existing token by UPN, then link the current session to it.
+
+    Same best-effort pattern as :func:`_lookup_session_token` (never
+    raises, returns ``None`` when anything is missing). The side effect
+    of binding ``session_id`` to the discovered state is intentional:
+    every subsequent call on this transport hits the fast session-keyed
+    lookup path and we don't repeat the linear UPN scan.
+    """
+    if not email:
+        return None
+    try:
+        from office_mcp.runtime import get_token_store
+    except ImportError:
+        return None
+    try:
+        store = get_token_store()
+    except RuntimeError:
+        return None
+    match = store.find_token_state_by_upn(email)
+    if match is None:
+        return None
+    state, entry = match
+    if session_id:
+        store.link_session_to_state(session_id, state)
     return entry.access_token
 
 

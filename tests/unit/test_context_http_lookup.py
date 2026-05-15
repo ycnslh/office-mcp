@@ -200,6 +200,84 @@ def test_current_user_no_token_when_session_unknown(
     assert ctx.on_behalf_of_token is None
 
 
+def test_current_user_recovers_token_by_upn_across_transports(
+    isolated_token_store: TokenStore,
+) -> None:
+    """LibreChat 0.8.5 sometimes opens a second MCP transport mid-chat
+    (we observed two ``Created new transport`` events back-to-back).
+    The token is bound to the first transport's session id; the second
+    transport's tool call shows up with a brand-new ``Mcp-Session-Id``
+    that no token is indexed under. The UPN fallback rescues this case
+    by matching the user via ``X-LibreChat-User-Email`` instead, so the
+    user isn't forced through a redundant re-auth flow."""
+    isolated_token_store.put_token(
+        "state-X",
+        TokenEntry(
+            access_token="cross-transport-AT",
+            refresh_token=None,
+            expires_at=time.time() + 3600,
+            user_oid="oid-1",
+            user_upn="alice@example.com",
+        ),
+    )
+    # Token deliberately bound to the OLD transport, not the new one.
+    isolated_token_store.link_session_to_state("old-transport", "state-X")
+
+    fake_request = _request(
+        {
+            "X-LibreChat-User-Id": "alice",
+            "X-LibreChat-User-Email": "Alice@Example.com",
+            "Mcp-Session-Id": "new-transport-never-bound",
+        }
+    )
+    with patch(
+        "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+    ):
+        ctx = current_user()
+    assert ctx is not None
+    assert ctx.on_behalf_of_token == "cross-transport-AT"
+    # Side effect: the new transport is now linked to the existing
+    # state, so the next call on the same transport hits the fast
+    # session-keyed path.
+    assert (
+        isolated_token_store.get_state_for_session("new-transport-never-bound")
+        == "state-X"
+    )
+
+
+def test_current_user_upn_fallback_does_not_run_without_email(
+    isolated_token_store: TokenStore,
+) -> None:
+    """Without a real email header we have no key for the UPN lookup —
+    must not match a token from a different user just because there's
+    only one in the store."""
+    isolated_token_store.put_token(
+        "state-X",
+        TokenEntry(
+            access_token="alice-AT",
+            refresh_token=None,
+            expires_at=time.time() + 3600,
+            user_oid="oid-1",
+            user_upn="alice@example.com",
+        ),
+    )
+
+    fake_request = _request(
+        {
+            "X-LibreChat-User-Id": "alice",
+            # Literal placeholder → email treated as absent
+            "X-LibreChat-User-Email": "{{LIBRECHAT_USER_EMAIL}}",
+            "Mcp-Session-Id": "fresh",
+        }
+    )
+    with patch(
+        "fastmcp.server.dependencies.get_http_request", return_value=fake_request
+    ):
+        ctx = current_user()
+    assert ctx is not None
+    assert ctx.on_behalf_of_token is None
+
+
 def test_current_mcp_session_id_reads_from_http_request_first() -> None:
     """The session id is the load-bearing key — pin its lookup explicitly."""
     fake_request = _request(

@@ -200,6 +200,36 @@ class TokenStore:
                 return None
             return entry
 
+    def find_token_state_by_upn(self, upn: str) -> tuple[str, TokenEntry] | None:
+        """Find any non-expired token belonging to the user with this UPN.
+
+        Returns ``(state, entry)`` so a caller can also link a fresh
+        ``mcp_session_id`` to the existing state.
+
+        Why this exists: LibreChat 0.8.5 sometimes opens multiple MCP
+        transports per chat (we observed two ``Created new transport``
+        events back-to-back). A user who completes the OAuth flow on
+        transport A then routes the next tool call through transport B
+        sees a brand-new ``mcp_session_id`` with no token bound to it —
+        and gets prompted to re-authenticate even though their token is
+        still fresh in the store. This UPN-keyed fallback re-uses the
+        existing token across all of that user's transports.
+
+        Returns ``None`` if no token matches the UPN, or all matching
+        tokens are expired.
+        """
+        if not upn:
+            return None
+        upn_lower = upn.lower()
+        with self._lock:
+            self._purge_expired_tokens_locked()
+            for state, entry in self._tokens.items():
+                if entry.is_expired():
+                    continue
+                if entry.user_upn.lower() == upn_lower:
+                    return state, entry
+        return None
+
     def get_state_for_session(self, mcp_session_id: str) -> str | None:
         """Return the OAuth ``state`` linked to ``mcp_session_id``, or ``None``.
 

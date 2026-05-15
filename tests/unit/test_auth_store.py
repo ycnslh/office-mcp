@@ -270,3 +270,60 @@ def test_token_purge_drops_orphan_session_links() -> None:
     fresh.put_token("state-Y", _entry())
     # ``session-1`` from the first store must not resolve in the new one.
     assert fresh.get_token_for_session("session-1") is None
+
+
+# ── UPN fallback (cross-transport recovery) ────────────────────────────
+
+
+def test_find_token_state_by_upn_returns_match() -> None:
+    """LibreChat 0.8.5 occasionally rotates the MCP transport mid-chat,
+    so a token bound to the previous session id wouldn't be reachable.
+    UPN-keyed lookup gives us a way to recover without forcing a
+    re-auth."""
+    store = TokenStore()
+    entry = _entry(user_upn="alice@example.com", access_token="for-alice")
+    store.put_token("state-A", entry)
+
+    match = store.find_token_state_by_upn("alice@example.com")
+
+    assert match is not None
+    state, found = match
+    assert state == "state-A"
+    assert found.access_token == "for-alice"
+
+
+def test_find_token_state_by_upn_is_case_insensitive() -> None:
+    """UPNs travel through email headers that frequently re-case the
+    domain; treat them as case-insensitive on lookup."""
+    store = TokenStore()
+    store.put_token("state-A", _entry(user_upn="Alice@Example.com"))
+
+    match = store.find_token_state_by_upn("alice@EXAMPLE.com")
+    assert match is not None
+    state, _entry_out = match
+    assert state == "state-A"
+
+
+def test_find_token_state_by_upn_skips_expired() -> None:
+    """An expired entry is as good as missing — don't hand it back."""
+    store = TokenStore()
+    store.put_token(
+        "state-A",
+        _entry(user_upn="alice@example.com", expires_at=time.time() - 10),
+    )
+
+    assert store.find_token_state_by_upn("alice@example.com") is None
+
+
+def test_find_token_state_by_upn_returns_none_for_unknown_upn() -> None:
+    store = TokenStore()
+    store.put_token("state-A", _entry(user_upn="alice@example.com"))
+
+    assert store.find_token_state_by_upn("bob@example.com") is None
+
+
+def test_find_token_state_by_upn_returns_none_for_empty_upn() -> None:
+    store = TokenStore()
+    store.put_token("state-A", _entry(user_upn="alice@example.com"))
+
+    assert store.find_token_state_by_upn("") is None
