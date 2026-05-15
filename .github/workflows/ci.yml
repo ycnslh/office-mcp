@@ -62,7 +62,7 @@ jobs:
         run: docker build -t office-mcp:ci-${{ github.sha }} .
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
-  # PoC mode: everything is hardcoded except MINIMAX_API_KEY.
+  # PoC mode: everything is hardcoded except OPENROUTER_API_KEY.
   # Repo is private, so the bearer token / LibreChat secrets being in plain
   # text is acceptable. Rotate before any non-PoC use.
   deploy:
@@ -127,16 +127,14 @@ jobs:
           OPENID_CALLBACK_URL=/oauth/openid/callback
           OPENID_BUTTON_LABEL=Continuer avec Microsoft
 
-          # MiniMax LLM — only real secret, injected from GitHub
-          MINIMAX_API_KEY=${{ secrets.MINIMAX_API_KEY }}
-          MINIMAX_BASE_URL=https://api.minimax.io/v1
-          MINIMAX_MODEL=MiniMax-M2.7
+          # OpenRouter LLM — only real secret, injected from GitHub
+          OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
           EOF
 
       - name: Validate required secrets are present
         run: |
           missing=0
-          for var in MINIMAX_API_KEY AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+          for var in OPENROUTER_API_KEY AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
             val=$(grep "^${var}=" .env | cut -d= -f2-)
             if [ -z "$val" ]; then
               echo "Missing required GitHub secret: ${var}"

@@ -2,7 +2,7 @@
 
 This guide walks through plugging `office-mcp` into an existing
 LibreChat deployment (tested against v0.8.4). The end result: a user
-chats with MiniMax (or any other LLM LibreChat supports), asks for an
+chats with OpenRouter (or any other LLM LibreChat supports), asks for an
 Office document, the LLM invokes the MCP tools, and a clickable
 download link appears in the conversation.
 
@@ -13,7 +13,7 @@ download link appears in the conversation.
 - `docker` and `docker compose` on the host.
 - A secret value generated with `openssl rand -hex 32`
   (used for both the bearer token and the signing secret).
-- Optionally, a MiniMax API key — any LibreChat-supported provider works
+- Optionally, an OpenRouter API key — any LibreChat-supported provider works
   once the MCP is wired.
 
 ## 1. Build (or pull) the office-mcp image
@@ -38,7 +38,7 @@ Set three environment variables before `docker compose up`:
 |----------------------------|------------------------------------------------------------------|
 | `OFFICE_MCP_TOKEN`         | Bearer shared between LibreChat and the MCP, and the signing key |
 | `OFFICE_MCP_PUBLIC_URL`    | Base URL a user's **browser** can reach — used in download links |
-| `MINIMAX_API_KEY`          | Only if you wire MiniMax in LibreChat                            |
+| `OPENROUTER_API_KEY`       | Only if you wire OpenRouter in LibreChat                         |
 
 `OFFICE_MCP_PUBLIC_URL` example:
 
@@ -54,8 +54,8 @@ override to match.
 In the LibreChat project's `librechat.yaml`, append the blocks from
 [`librechat.yaml.example`](../librechat.yaml.example):
 
-- `endpoints.custom` — adds MiniMax as an OpenAI-compatible endpoint.
-  Omit if MiniMax isn't needed.
+- `endpoints.custom` — adds OpenRouter as an OpenAI-compatible endpoint.
+  Omit if OpenRouter isn't needed.
 - `mcpSettings.allowedDomains` — **mandatory**: add `office-mcp` to the
   allow-list, otherwise LibreChat refuses internal addresses as SSRF.
 - `mcpServers.office` — the streamable-http MCP declaration.

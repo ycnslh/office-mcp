@@ -34,7 +34,7 @@ LibreChat's storage.
 cp .env.example .env
 # Generate the four LibreChat secrets with `openssl rand -hex 32`
 # and set OFFICE_MCP_TOKEN, OFFICE_MCP_SIGNING_SECRET (can be the same),
-# MINIMAX_API_KEY, and the LibreChat secrets.
+# OPENROUTER_API_KEY, and the LibreChat secrets.
 
 # 2. Bring the stack up
 docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build
