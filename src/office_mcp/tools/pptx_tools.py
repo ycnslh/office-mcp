@@ -69,7 +69,7 @@ async def pptx_create(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "theme": theme,
         "slide_count": slide_count,
         "summary": (
@@ -122,7 +122,7 @@ async def pptx_append(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "summary": f"Appended {len(slides)} slide(s) to {meta.uri}",
     }
 
@@ -157,7 +157,7 @@ async def pptx_replace(
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "summary": f"Patched {len(updates)} slide(s) in {meta.uri}",
     }
 

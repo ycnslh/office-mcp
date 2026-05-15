@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 
 from office_mcp.auth import OAuthClient, TokenStore
 from office_mcp.config import Settings
+from office_mcp.context import UserContext
 from office_mcp.storage import StorageRegistry
 from office_mcp.storage.base import FileMetadata
 from office_mcp.utils import signing
@@ -72,10 +73,11 @@ WORKFLOW
        - `pptx_create(slides=[...])`  — title / content / two-content / section slides
      Do not chain a create + multiple appends when you already know
      the content.
-  2. Every mutating tool returns a `download_url` pointing to the file
-     in OneDrive web (the user opens it in their Microsoft account).
-     Render it as a Markdown link so the user can click directly from
-     the conversation.
+  2. Every mutating tool returns a `download_url` that opens the file
+     in a read-only Office for the web viewer — the user sees the
+     document in their browser without downloading a copy and without
+     blocking further edits from chat. Render it as a Markdown link so
+     the user can click directly from the conversation.
   3. Always echo the resulting `file_uri` alongside the download link.
 
 ERROR HANDLING
@@ -156,26 +158,42 @@ def set_token_store(store: TokenStore | None) -> None:
     _token_store = store
 
 
-def download_url_for(meta: FileMetadata, user_id: str) -> str | None:
-    """Return a signed ``/files/{token}`` URL the user can click to download.
+async def download_url_for(meta: FileMetadata, user: UserContext) -> str | None:
+    """Return a clickable URL for the file: read-only viewer if possible.
 
-    We deliberately ignore ``meta.web_url`` (the OneDrive
-    ``*.sharepoint.com`` URL) here, even though it would be convenient
-    to surface it as a one-click "open in Word for the web" link.
-    Clicking that URL starts a WOPI coauthoring session on Microsoft's
-    side; that session holds an exclusive lock on the file for as long
-    as the browser tab stays open, which makes every subsequent
-    ``docx_*``/``xlsx_*``/``pptx_*`` write fail with HTTP 423 — even
-    via the upload-session API. Observed in production with both
-    MiniMax and Nemotron, where the LLM ends up cloning the file under
-    a ``<name>_v2`` to "work around" the lock.
+    For ``od://`` URIs with a valid user token we ask Graph for a
+    read-only embed via ``POST /me/drive/items/<path>:/preview``. That
+    URL opens Office for the web in view-only mode — **no WOPI write
+    lock is acquired** so subsequent server-side edits keep working.
+    The user sees the document in their browser without triggering a
+    download (no local-copy duplication), and crucially without
+    blocking us out.
 
-    Always pointing the user at the signed download endpoint instead
-    means the browser saves the file with ``Content-Disposition:
-    attachment``: Word for the web is never invoked, no WOPI session
-    starts, and the file stays writable from chat.
+    This replaces a previous design that returned ``meta.web_url``
+    directly. ``web_url`` is the *edit* URL: clicking it starts a
+    coauthoring session that holds an exclusive lock and breaks every
+    subsequent server-side write (observed in production with both
+    MiniMax and Nemotron — the LLM "worked around" the lock by cloning
+    the file under ``<name>_v2``).
+
+    For backends without a preview API (currently every backend except
+    Graph) or when the Graph call fails, fall back to a signed
+    ``/files/{token}`` URL that streams the bytes through office-mcp.
     """
-    return build_download_url(meta.uri, user_id)
+    if meta.uri.startswith("od://") and _registry is not None:
+        try:
+            backend = _registry.get(meta.uri)
+        except Exception:
+            backend = None
+        preview = getattr(backend, "preview_url", None)
+        if preview is not None:
+            try:
+                url = await preview(meta.uri, user_ctx=user)
+            except Exception:
+                url = None
+            if url:
+                return url
+    return build_download_url(meta.uri, user.user_id)
 
 
 def build_download_url(uri: str, user_id: str) -> str | None:

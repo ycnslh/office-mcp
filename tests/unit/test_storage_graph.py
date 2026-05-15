@@ -769,6 +769,90 @@ async def test_delete_short_circuits_on_external_coauthoring_lock(
     assert len(httpx_mock.get_requests()) == 2
 
 
+# ── preview (read-only viewer URL) ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_preview_url_returns_get_url_from_graph(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """The read-only viewer URL replaces meta.web_url in user-facing
+    responses — clicking it opens Office for the web in view mode and
+    crucially does NOT acquire the WOPI write lock."""
+    embed = (
+        "https://example-my.sharepoint.com/personal/_layouts/15/"
+        "Doc.aspx?sourcedoc=ABC&action=embedview"
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/preview",
+        method="POST",
+        json={"getUrl": embed, "postUrl": None},
+    )
+
+    url = await backend.preview_url("od://q.docx", user_ctx=_user("AT"))
+
+    assert url == embed
+
+
+@pytest.mark.asyncio
+async def test_preview_url_returns_none_without_token(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """No anonymous /preview — without a user token we can't call it,
+    so report None and let the caller fall back to a signed URL."""
+    url = await backend.preview_url("od://q.docx", user_ctx=_user(None))
+
+    assert url is None
+    # No HTTP call should have been issued.
+    assert httpx_mock.get_requests() == []
+
+
+@pytest.mark.asyncio
+async def test_preview_url_returns_none_on_graph_404(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """File doesn't exist (or is otherwise unreachable) — return None
+    rather than raising; the caller falls back to a signed URL."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/missing.docx:/preview",
+        method="POST",
+        status_code=404,
+    )
+
+    url = await backend.preview_url("od://missing.docx", user_ctx=_user("AT"))
+
+    assert url is None
+
+
+@pytest.mark.asyncio
+async def test_preview_url_returns_none_on_malformed_response(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """Graph said 200 but the body has no usable ``getUrl`` — treat as
+    failure so the caller can degrade gracefully."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/preview",
+        method="POST",
+        json={"unexpected": "shape"},
+    )
+
+    url = await backend.preview_url("od://q.docx", user_ctx=_user("AT"))
+
+    assert url is None
+
+
+@pytest.mark.asyncio
+async def test_preview_url_rejects_path_traversal(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """URI parse errors short-circuit BEFORE hitting Graph — the URI is
+    bad, no preview makes sense."""
+    url = await backend.preview_url("od://../escape.docx", user_ctx=_user("AT"))
+
+    assert url is None
+    assert httpx_mock.get_requests() == []
+
+
 # ── list (recursive BFS) ───────────────────────────────────────────────
 
 

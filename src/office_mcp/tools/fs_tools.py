@@ -45,7 +45,7 @@ async def fs_list(uri_prefix: str) -> dict[str, Any]:
                 "size_bytes": meta.size_bytes,
                 "modified_at": meta.modified_at,
                 "mime_type": meta.mime_type,
-                "download_url": download_url_for(meta, user.user_id),
+                "download_url": await download_url_for(meta, user),
             }
         )
     return {
@@ -77,7 +77,7 @@ async def fs_stat(file_uri: str) -> dict[str, Any]:
         "modified_at": meta.modified_at,
         "etag": meta.etag,
         "mime_type": meta.mime_type,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
     }
 
 
@@ -101,7 +101,7 @@ async def fs_copy(source_uri: str, destination_uri: str) -> dict[str, Any]:
         "file_uri": meta.uri,
         "size_bytes": meta.size_bytes,
         "etag": meta.etag,
-        "download_url": download_url_for(meta, user.user_id),
+        "download_url": await download_url_for(meta, user),
         "summary": (
             f"Copied {source_uri} → {meta.uri} ({meta.size_bytes} bytes)"
         ),
