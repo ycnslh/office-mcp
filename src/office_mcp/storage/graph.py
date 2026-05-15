@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -310,9 +310,10 @@ class GraphBackend(StorageBackend):
         relays the real fix ("close the open Word tab") instead of
         wasting the retry budget.
         """
-        response: httpx.Response | None = None
         token = _extract_bearer(request_kwargs.get("headers"))
-        for idx, delay in enumerate((0.0, *_RETRY_LOCKED_DELAYS_S)):
+        delays = (0.0, *_RETRY_LOCKED_DELAYS_S)
+        last_idx = len(delays) - 1
+        for idx, delay in enumerate(delays):
             if delay:
                 await asyncio.sleep(delay)
             response = await self._client.request(method, url, **request_kwargs)
@@ -329,14 +330,20 @@ class GraphBackend(StorageBackend):
                         f"lock). Close the open editor session and retry — "
                         f"the server cannot release this lock for you."
                     )
+            if idx == last_idx:
+                # Retry budget exhausted — surface the final 423 to the
+                # caller so ``_raise_for_status`` turns it into the
+                # "still indexing" message.
+                return response
             log.info(
                 "graph.resource_locked.retry",
                 uri=uri,
                 method=method,
                 next_delay_s=delay,
             )
-        assert response is not None  # loop runs at least once
-        return response
+        # Unreachable: the loop always returns on either success, external
+        # lock, or exhausted budget. This satisfies the type checker.
+        raise RuntimeError("retry loop completed without returning")
 
     async def _is_external_lock(
         self,
@@ -382,7 +389,7 @@ class GraphBackend(StorageBackend):
             )
         except ValueError:
             return False
-        age_s = (datetime.now(timezone.utc) - modified_at).total_seconds()
+        age_s = (datetime.now(UTC) - modified_at).total_seconds()
         if age_s <= _EXTERNAL_LOCK_AGE_S:
             return False
         log.info(

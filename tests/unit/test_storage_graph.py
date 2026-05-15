@@ -9,7 +9,7 @@ office-mcp errors.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -34,7 +34,7 @@ def _user(token: str | None) -> UserContext:
 
 def _iso_age(seconds_ago: float) -> str:
     """ISO-8601 ``Z`` timestamp this many seconds in the past."""
-    ts = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    ts = datetime.now(UTC) - timedelta(seconds=seconds_ago)
     return ts.isoformat().replace("+00:00", "Z")
 
 
