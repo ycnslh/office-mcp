@@ -2,21 +2,25 @@ version: 1.2.0
 cache: true
 
 # ──────────────────────────────────────────────────────────────────────
-# LLM providers — MiniMax via OpenAI-compatible API.
-# Plan token is injected at deploy time from the MINIMAX_API_KEY secret;
+# LLM providers — OpenRouter via OpenAI-compatible API.
+# API key is injected at deploy time from the OPENROUTER_API_KEY secret;
 # users do NOT need to enter it through the LibreChat UI.
 # ──────────────────────────────────────────────────────────────────────
 endpoints:
   custom:
-    - name: "MiniMax"
-      apiKey: "${MINIMAX_API_KEY}"
-      baseURL: "https://api.minimax.io/v1"
+    - name: "OpenRouter"
+      apiKey: "${OPENROUTER_API_KEY}"
+      baseURL: "https://openrouter.ai/api/v1"
       models:
-        default: ["MiniMax-M2.7"]
-        fetch: false
+        default: ["nvidia/nemotron-3-super-120b-a12b:free"]
+        fetch: true
       titleConvo: true
-      titleModel: "MiniMax-M2.7"
-      modelDisplayLabel: "MiniMax"
+      titleModel: "nvidia/nemotron-3-super-120b-a12b:free"
+      modelDisplayLabel: "OpenRouter"
+      # OpenRouter attribution headers (used for rankings / dashboard).
+      headers:
+        HTTP-Referer: "https://office-mcp.reho.dev"
+        X-Title: "office-mcp"
 
 mcpSettings:
   # MCP servers using internal IPs/local domains MUST be allow-listed here,

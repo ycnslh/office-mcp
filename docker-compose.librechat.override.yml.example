@@ -13,7 +13,7 @@
 #
 # Then in the client's LibreChat project:
 #   cp librechat.yaml.example librechat.yaml
-#   # (copy the `mcpServers.office` + `endpoints.custom.MiniMax` blocks)
+#   # (copy the `mcpServers.office` + `endpoints.custom.OpenRouter` blocks)
 #   cp docker-compose.librechat.override.yml.example docker-compose.override.yml
 #   # edit secrets / base URLs below
 #   docker compose up -d
@@ -52,11 +52,11 @@ services:
       retries: 3
 
   # LibreChat's existing `api` container gains the env block it needs to
-  # render the MiniMax custom endpoint and to mount the librechat.yaml
+  # render the OpenRouter custom endpoint and to mount the librechat.yaml
   # that declares the office MCP server.
   api:
     environment:
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
     volumes:
       - ./librechat.yaml:/app/librechat.yaml:ro
