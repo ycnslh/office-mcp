@@ -300,7 +300,7 @@ async def test_write_surfaces_unavailable_when_lock_persists(
             status_code=423,
         )
 
-    with pytest.raises(BackendUnavailableError, match="423"):
+    with pytest.raises(BackendUnavailableError, match="still indexing"):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
 
@@ -513,6 +513,55 @@ async def test_delete_404_raises_not_found(
     )
     with pytest.raises(StorageNotFoundError):
         await backend.delete("od://x.txt", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_delete_retries_through_brief_resource_lock(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DELETE hits the same post-write 423 lock as PUT — the LLM
+    asking to remove a file it just created would otherwise see a hard
+    BackendUnavailableError. Reuses ``_retry_on_423`` like ``write``."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    # Two 423s, then a 204 — the call must succeed transparently.
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="DELETE",
+        status_code=423,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="DELETE",
+        status_code=423,
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="DELETE",
+        status_code=204,
+    )
+
+    await backend.delete("od://q.docx", user_ctx=_user("AT"))
+    assert len(httpx_mock.get_requests()) == 3
+
+
+@pytest.mark.asyncio
+async def test_delete_surfaces_unavailable_when_lock_persists(
+    backend: GraphBackend, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    for _ in range(3):  # initial + 2 retries
+        httpx_mock.add_response(
+            url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+            method="DELETE",
+            status_code=423,
+        )
+
+    with pytest.raises(BackendUnavailableError, match="still indexing"):
+        await backend.delete("od://q.docx", user_ctx=_user("AT"))
 
 
 # ── list (recursive BFS) ───────────────────────────────────────────────
