@@ -56,7 +56,12 @@ _MAX_SIMPLE_PUT_BYTES = 4 * 1024 * 1024
 #: it (HTTP 423 ``resourceLocked``). Rapid successive edits from the
 #: LLM trip this in practice — we retry transparently with backoff
 #: rather than asking the model to recover, which it does poorly.
-_RETRY_LOCKED_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0)
+#: The previous (1, 2, 4) schedule (~7 s window) was too short: in
+#: production we observed locks persisting 8–30 s after a fresh
+#: create while SharePoint runs AV scan + preview generation. The
+#: cumulative ~31 s window stays well under LibreChat's 120 s MCP
+#: tool timeout while covering most real lock durations.
+_RETRY_LOCKED_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
 
 
 class GraphBackend(StorageBackend):
@@ -182,6 +187,17 @@ class GraphBackend(StorageBackend):
         if status == 507:
             raise BackendUnavailableError(
                 f"OneDrive quota exhausted for {uri}"
+            )
+        if status == 423:
+            # The bounded retry in ``_retry_on_423`` exhausted itself —
+            # OneDrive is still holding the lock (typically AV scan or
+            # Office Online preview generation after a fresh write).
+            # Spell out the cause so the LLM waits-and-retries instead
+            # of cloning the file under a v2 name.
+            raise BackendUnavailableError(
+                f"OneDrive is still indexing {uri} (post-write lock held >30 s). "
+                f"Wait ~30 seconds and retry the same file_uri — do not rename "
+                f"or create a v2 copy."
             )
         raise BackendUnavailableError(
             f"Microsoft Graph returned {status} for {uri}: {response.text[:200]}"
@@ -327,8 +343,14 @@ class GraphBackend(StorageBackend):
     async def delete(self, uri: str, *, user_ctx: UserContext) -> None:
         token = self._require_token(user_ctx)
         path = self._path_from_uri(uri)
-        response = await self._client.delete(
+        # OneDrive holds the same post-write 423 lock on DELETE as on
+        # PUT — the file the LLM just created stays locked for tens of
+        # seconds while SharePoint indexes it, and a delete issued in
+        # that window fails. Reuse the same retry strategy as write().
+        response = await self._retry_on_423(
+            "DELETE",
             self._drive_url(path),
+            uri,
             headers={"Authorization": f"Bearer {token}"},
         )
         self._raise_for_status(response, uri)
