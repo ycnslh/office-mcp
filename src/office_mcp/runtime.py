@@ -157,16 +157,24 @@ def set_token_store(store: TokenStore | None) -> None:
 
 
 def download_url_for(meta: FileMetadata, user_id: str) -> str | None:
-    """Return the user-facing URL for a file, preferring its native viewer.
+    """Return a signed ``/files/{token}`` URL the user can click to download.
 
-    For backends that surface a browser URL (``meta.web_url`` — e.g.
-    OneDrive's ``webUrl``), that is returned as-is so the user lands in
-    the file's native viewer with their existing session. For backends
-    without one (``local://``), falls back to a signed ``/files/{token}``
-    URL via :func:`build_download_url`.
+    We deliberately ignore ``meta.web_url`` (the OneDrive
+    ``*.sharepoint.com`` URL) here, even though it would be convenient
+    to surface it as a one-click "open in Word for the web" link.
+    Clicking that URL starts a WOPI coauthoring session on Microsoft's
+    side; that session holds an exclusive lock on the file for as long
+    as the browser tab stays open, which makes every subsequent
+    ``docx_*``/``xlsx_*``/``pptx_*`` write fail with HTTP 423 — even
+    via the upload-session API. Observed in production with both
+    MiniMax and Nemotron, where the LLM ends up cloning the file under
+    a ``<name>_v2`` to "work around" the lock.
+
+    Always pointing the user at the signed download endpoint instead
+    means the browser saves the file with ``Content-Disposition:
+    attachment``: Word for the web is never invoked, no WOPI session
+    starts, and the file stays writable from chat.
     """
-    if meta.web_url:
-        return meta.web_url
     return build_download_url(meta.uri, user_id)
 
 
