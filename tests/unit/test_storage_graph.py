@@ -384,7 +384,7 @@ async def test_write_surfaces_unavailable_when_lock_persists(
         },
     )
 
-    with pytest.raises(BackendUnavailableError, match="still indexing"):
+    with pytest.raises(BackendUnavailableError, match="still finishing post-write"):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
 
@@ -420,7 +420,7 @@ async def test_write_short_circuits_on_external_coauthoring_lock(
         },
     )
 
-    with pytest.raises(BackendUnavailableError, match="Word Online"):
+    with pytest.raises(BackendUnavailableError, match="Word for the web"):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
     assert len(httpx_mock.get_requests()) == 2
@@ -739,7 +739,7 @@ async def test_delete_surfaces_unavailable_when_lock_persists(
         },
     )
 
-    with pytest.raises(BackendUnavailableError, match="still indexing"):
+    with pytest.raises(BackendUnavailableError, match="still finishing post-write"):
         await backend.delete("od://q.docx", user_ctx=_user("AT"))
 
 
@@ -770,7 +770,7 @@ async def test_delete_short_circuits_on_external_coauthoring_lock(
         },
     )
 
-    with pytest.raises(BackendUnavailableError, match="Word Online"):
+    with pytest.raises(BackendUnavailableError, match="Word for the web"):
         await backend.delete("od://q.docx", user_ctx=_user("AT"))
 
     assert len(httpx_mock.get_requests()) == 2
@@ -1309,7 +1309,7 @@ async def test_upload_put_423_classifier_works_without_request_auth(
         status_code=204,
     )
 
-    with pytest.raises(BackendUnavailableError, match="Word Online"):
+    with pytest.raises(BackendUnavailableError, match="Word for the web"):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
     # The diagnostic GET on /me/drive/root:/q.docx confirms the probe
@@ -1381,7 +1381,7 @@ async def test_create_upload_session_409_nameAlreadyExists_blocks_v2_rename(
     )
 
     with pytest.raises(
-        BackendUnavailableError, match="releasing a name reservation"
+        BackendUnavailableError, match="name reservation"
     ):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 

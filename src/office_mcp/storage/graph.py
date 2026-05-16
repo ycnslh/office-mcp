@@ -181,6 +181,26 @@ _TRANSIENT_LOCK_CODES: frozenset[str] = frozenset({
     "resourceLocked",
 })
 
+#: Shared recovery hint appended to every "external lock detected"
+#: error so the LLM has a verbatim, actionable script to relay. Kept
+#: as a constant so all three call sites (body-code permanent, mtime
+#: probe external, 409 nameAlreadyExists) speak with one voice — the
+#: model learns one pattern and stops trying creative workarounds
+#: (rename, write-to-different-path, ask-the-user-to-restart-OneDrive,
+#: etc.) that we've seen in past traces. The phrasing is deliberately
+#: long-form: weaker LLMs paraphrase aggressively and lose the
+#: critical "auto-save 60 s, you won't lose anything" reassurance
+#: when the source is too terse.
+_LOCK_RECOVERY_HINT = (
+    "To proceed: close the document in the browser tab where it's open "
+    "(Word for the web auto-saves every 60 seconds, so your in-progress "
+    "edits will be preserved). Once the tab is closed the lock releases "
+    "within a few seconds — then ask again to apply the change on the "
+    "SAME file_uri. Do not rename the file or create a v2 copy: the lock "
+    "belongs to your own editor session and only closing it releases the "
+    "lock — no external API, including this server, can release it for you."
+)
+
 
 class GraphBackend(StorageBackend):
     """OneDrive backend using delegated tokens via Microsoft Graph."""
@@ -317,10 +337,14 @@ class GraphBackend(StorageBackend):
             code = _extract_error_code(response)
             if code == "nameAlreadyExists":
                 raise BackendUnavailableError(
-                    f"OneDrive is still releasing a name reservation from a "
-                    f"recent edit attempt on {uri}. Wait ~60 seconds and "
-                    f"retry the SAME file_uri — do NOT rename the file or "
-                    f"create a v2 copy."
+                    f"Cannot save changes to {uri} right now: OneDrive is "
+                    f"still releasing a temporary name reservation from a "
+                    f"recent edit attempt on this file. This usually clears "
+                    f"in under a minute. Wait ~60 seconds and ask again to "
+                    f"apply the change on the SAME file_uri. Do not rename "
+                    f"the file or create a v2 copy: a rename leaves an "
+                    f"orphan in OneDrive and the reservation will release "
+                    f"on its own."
                 )
             raise BackendUnavailableError(
                 f"Microsoft Graph returned 409 for {uri} "
@@ -333,9 +357,13 @@ class GraphBackend(StorageBackend):
             # Spell out the cause so the LLM waits-and-retries instead
             # of cloning the file under a v2 name.
             raise BackendUnavailableError(
-                f"OneDrive is still indexing {uri} (post-write lock held >30 s). "
-                f"Wait ~30 seconds and retry the same file_uri — do not rename "
-                f"or create a v2 copy."
+                f"Cannot save changes to {uri} right now: OneDrive is "
+                f"still finishing post-write processing on this file "
+                f"(SharePoint indexing, antivirus scan, and Office "
+                f"preview generation run for up to ~30 s after every "
+                f"write). Wait ~30 seconds and ask again to apply the "
+                f"change on the SAME file_uri. Do not rename the file "
+                f"or create a v2 copy: this clears on its own."
             )
         raise BackendUnavailableError(
             f"Microsoft Graph returned {status} for {uri}: {response.text[:200]}"
@@ -566,11 +594,12 @@ class GraphBackend(StorageBackend):
                 code = _extract_error_code(response)
                 if code in _PERMANENT_LOCK_CODES:
                     raise BackendUnavailableError(
-                        f"{uri} is locked by an external session "
-                        f"(Graph code={code!r}). Close the open editor "
-                        f"(Word Online, OneDrive desktop, Office "
-                        f"Mobile) and retry — the server cannot "
-                        f"release this lock for you."
+                        f"Cannot save changes to {uri} right now: this "
+                        f"file is open for editing in Word for the web "
+                        f"(or another Office app — OneDrive desktop, "
+                        f"Office Mobile). The editor holds an exclusive "
+                        f"WOPI write lock (Graph code={code!r}). "
+                        + _LOCK_RECOVERY_HINT
                     )
                 if (
                     code not in _TRANSIENT_LOCK_CODES
@@ -579,11 +608,11 @@ class GraphBackend(StorageBackend):
                     and await self._is_external_lock(uri, token, response)
                 ):
                     raise BackendUnavailableError(
-                        f"{uri} is currently open in Word Online, "
-                        f"OneDrive desktop, or another Office client "
-                        f"(coauthoring lock). Close the open editor "
-                        f"session and retry — the server cannot "
-                        f"release this lock for you."
+                        f"Cannot save changes to {uri} right now: this "
+                        f"file is currently open for editing in Word for "
+                        f"the web (or OneDrive desktop, Office Mobile) — "
+                        f"a coauthoring lock is held by your editor "
+                        f"session. " + _LOCK_RECOVERY_HINT
                     )
                 external_lock_probed = True
                 if locked_idx >= len(_RETRY_LOCKED_DELAYS_S):
