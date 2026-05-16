@@ -154,15 +154,20 @@ _EXTERNAL_LOCK_AGE_S: float = 90.0
 #: Documented Graph ``error.code`` values on a 423 that signal a
 #: condition no server-side retry can clear. Drawn from the
 #: ``assignSensitivityLabel`` / ``extractSensitivityLabels`` API
-#: contracts plus the WOPI lock-mismatch family surfaced on writes
-#: when an external editor holds the file. When the response body
-#: carries one of these, we short-circuit with an actionable message
-#: instead of waiting out the 423 retry budget.
+#: contracts, the WOPI lock-mismatch family surfaced on writes when
+#: an external editor holds the file, and ``notAllowed`` which we've
+#: observed empirically on the upload-URL PUT when Word for the web
+#: holds a coauthoring lock. (The latter isn't documented but is the
+#: actual code SharePoint returns — verified in production logs after
+#: PR #32 still produced a v2 rename.) When the response body carries
+#: one of these, we short-circuit with an actionable message instead
+#: of waiting out the 423 retry budget.
 _PERMANENT_LOCK_CODES: frozenset[str] = frozenset({
     "fileDoubleKeyEncrypted",
     "fileDecryptionNotSupported",
     "irmEnforcementFailed",
     "lockMismatch",
+    "notAllowed",
     "wopiLockMismatch",
     "resourceModified",
 })
@@ -301,6 +306,26 @@ class GraphBackend(StorageBackend):
             raise BackendUnavailableError(
                 f"OneDrive quota exhausted for {uri}"
             )
+        if status == 409:
+            # Surfaced primarily on createUploadSession when a previous
+            # session for the same filename hasn't fully released its
+            # ghost reservation (lasts up to a few minutes after a
+            # failed PUT). Microsoft's own message tells the caller to
+            # "Change the filename" — which on an LLM client produces a
+            # v2 rename. Override with explicit wait-and-retry guidance
+            # so the model doesn't fall back to that anti-pattern.
+            code = _extract_error_code(response)
+            if code == "nameAlreadyExists":
+                raise BackendUnavailableError(
+                    f"OneDrive is still releasing a name reservation from a "
+                    f"recent edit attempt on {uri}. Wait ~60 seconds and "
+                    f"retry the SAME file_uri — do NOT rename the file or "
+                    f"create a v2 copy."
+                )
+            raise BackendUnavailableError(
+                f"Microsoft Graph returned 409 for {uri} "
+                f"(code={code!r}): {response.text[:200]}"
+            )
         if status == 423:
             # The bounded retry in ``_retry_transient`` exhausted itself —
             # OneDrive is still holding the lock (typically AV scan or
@@ -417,30 +442,75 @@ class GraphBackend(StorageBackend):
         # Step 2 — single-shot ranged PUT to the pre-signed uploadUrl.
         # CRITICAL: the uploadUrl is pre-signed; do NOT add an
         # Authorization header (Microsoft docs explicitly forbid it).
-        # The 423-classifier inside _retry_transient sees no bearer
-        # token in the headers and skips the diagnostic mtime probe,
-        # which is what we want — the upload URL isn't a driveItem path.
+        # We pass ``probe_bearer`` explicitly so the 423-classifier in
+        # _retry_transient can still probe ``lastModifiedDateTime`` and
+        # short-circuit when Word for the web holds a coauthoring lock —
+        # without that, the classifier degrades silently into "retry
+        # blindly" mode and we burn the full 31 s budget for nothing
+        # (observed in production after PR #32 still produced a v2
+        # rename when the user had the file open in Word Online).
         upload_headers: dict[str, str] = {
             "Content-Length": str(size),
             "Content-Range": f"bytes 0-{size - 1}/{size}",
         }
         if if_match is not None:
             upload_headers["If-Match"] = if_match
-        upload_response = await self._retry_transient(
-            "PUT",
-            upload_url,
-            effective_uri,
-            content=data,
-            headers=upload_headers,
-        )
-        self._raise_for_status(upload_response, effective_uri)
+        try:
+            upload_response = await self._retry_transient(
+                "PUT",
+                upload_url,
+                effective_uri,
+                probe_bearer=token,
+                content=data,
+                headers=upload_headers,
+            )
+            self._raise_for_status(upload_response, effective_uri)
+        except Exception:
+            # Cancel the dead upload session so SharePoint releases the
+            # filename reservation. Without this, every subsequent
+            # createUploadSession on the same path returns 409
+            # ``nameAlreadyExists`` for several minutes, and the LLM
+            # follows Microsoft's "Change the filename" hint by creating
+            # ``<name>_v2.docx`` — the exact anti-pattern this whole
+            # retry stack exists to prevent.
+            await self._cancel_upload_session(upload_url)
+            raise
         return self._to_metadata(effective_uri, upload_response.json())
+
+    async def _cancel_upload_session(self, upload_url: str) -> None:
+        """Best-effort DELETE of a pre-signed upload session URL.
+
+        Microsoft documents DELETE on the ``uploadUrl`` as the way to
+        clean up a session and free its temporary state — including the
+        ghost name reservation that otherwise blocks the next
+        ``createUploadSession`` for the same path. Failures here are
+        intentionally swallowed: we're already on an error path and an
+        orphan session will expire on its own. The log line lets ops
+        spot a runaway pattern (e.g. Graph rejecting our cancels).
+        """
+        try:
+            response = await self._client.delete(upload_url)
+        except httpx.RequestError as exc:
+            log.info(
+                "graph.upload_session.cancel_failed",
+                upload_url=upload_url,
+                error=str(exc),
+            )
+            return
+        if response.status_code not in (200, 204, 404):
+            log.info(
+                "graph.upload_session.cancel_non_2xx",
+                upload_url=upload_url,
+                status=response.status_code,
+            )
 
     async def _retry_transient(
         self,
         method: str,
         url: str,
         uri: str,
+        *,
+        probe_bearer: str | None = None,
         **request_kwargs: Any,
     ) -> httpx.Response:
         """Issue a Graph request, absorbing transient failures inline.
@@ -475,7 +545,13 @@ class GraphBackend(StorageBackend):
            ``Insufficient Storage``) are *not* retried — they're
            permanent until external action.
         """
-        token = _extract_bearer(request_kwargs.get("headers"))
+        # The probe needs a bearer to call /me/drive/root:/<path>. Prefer
+        # the explicit ``probe_bearer`` kwarg — required when the request
+        # itself carries no Authorization header (e.g. the pre-signed
+        # upload-session PUT, where Microsoft explicitly forbids auth).
+        # Falls back to scraping the request's own header so existing
+        # callers that don't pass it keep working.
+        token = probe_bearer or _extract_bearer(request_kwargs.get("headers"))
         locked_idx = 0
         fivexx_idx = 0
         external_lock_probed = False
