@@ -282,6 +282,8 @@ async def test_write_412_raises_precondition_failed(
     """412 from the upload-URL PUT (stale If-Match) must surface as
     ``PreconditionFailedError`` — the optimistic-concurrency contract
     stays identical across the simple-PUT and upload-session paths.
+    The failed PUT also triggers the upload-session cleanup DELETE so
+    the next attempt isn't blocked by a ghost name reservation.
     """
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession",
@@ -292,6 +294,11 @@ async def test_write_412_raises_precondition_failed(
         url=_TEST_UPLOAD_URL,
         method="PUT",
         status_code=412,
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="DELETE",
+        status_code=204,
     )
     with pytest.raises(PreconditionFailedError):
         await backend.write(
