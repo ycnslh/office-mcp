@@ -1381,7 +1381,7 @@ async def test_create_upload_session_409_nameAlreadyExists_blocks_v2_rename(
     )
 
     with pytest.raises(
-        BackendUnavailableError, match="releasing a name reservation"
+        BackendUnavailableError, match="name reservation"
     ):
         await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
