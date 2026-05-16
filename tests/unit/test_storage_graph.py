@@ -282,6 +282,8 @@ async def test_write_412_raises_precondition_failed(
     """412 from the upload-URL PUT (stale If-Match) must surface as
     ``PreconditionFailedError`` — the optimistic-concurrency contract
     stays identical across the simple-PUT and upload-session paths.
+    The failed PUT also triggers the upload-session cleanup DELETE so
+    the next attempt isn't blocked by a ghost name reservation.
     """
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession",
@@ -292,6 +294,11 @@ async def test_write_412_raises_precondition_failed(
         url=_TEST_UPLOAD_URL,
         method="PUT",
         status_code=412,
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="DELETE",
+        status_code=204,
     )
     with pytest.raises(PreconditionFailedError):
         await backend.write(
@@ -1206,6 +1213,177 @@ async def test_423_transient_body_code_skips_mtime_probe(
     # 2 POSTs + 1 PUT = 3 — no diagnostic GET (body code told us
     # everything we needed).
     assert len(httpx_mock.get_requests()) == 3
+
+
+@pytest.mark.asyncio
+async def test_upload_put_423_notAllowed_short_circuits_and_cancels_session(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The actual production failure mode: file is open in Word for the
+    web, the upload-URL PUT returns 423 with body code ``notAllowed``,
+    and we must (a) short-circuit immediately with an actionable
+    message — not burn the 31 s retry budget on a dead session — and
+    (b) DELETE the upload URL so SharePoint releases the filename
+    reservation. Without the cancel, the next createUploadSession on
+    the same path returns 409 ``nameAlreadyExists`` and the LLM falls
+    back to a ``_v2.docx`` rename (observed in prod after PR #32)."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
+    httpx_mock.add_response(
+        url=create_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="PUT",
+        status_code=423,
+        json={
+            "error": {
+                "code": "notAllowed",
+                "message": "The operation isn't allowed.",
+            }
+        },
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="DELETE",
+        status_code=204,
+    )
+
+    with pytest.raises(BackendUnavailableError, match="notAllowed"):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    requests = httpx_mock.get_requests()
+    methods = [r.method for r in requests]
+    # POST createUploadSession, PUT (one — short-circuited), DELETE cleanup.
+    # No retries: the body code told us the lock is external.
+    assert methods == ["POST", "PUT", "DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_upload_put_423_classifier_works_without_request_auth(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The upload-URL PUT carries no Authorization header (Microsoft
+    forbids it). Without the explicit ``probe_bearer`` plumbing, the
+    classifier silently degraded to "retry blindly" — the actual bug
+    behind the prod v2 rename. Lock the contract that the classifier
+    still fires on the no-auth PUT and detects an external lock via
+    the mtime heuristic."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
+    httpx_mock.add_response(
+        url=create_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    # 423 with no body code → classifier falls back to the mtime probe.
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="PUT",
+        status_code=423,
+    )
+    # Diagnostic probe — file modified 10 min ago → external lock.
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx",
+        method="GET",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": _iso_age(600),
+            "eTag": '"old"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="DELETE",
+        status_code=204,
+    )
+
+    with pytest.raises(BackendUnavailableError, match="Word Online"):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    # The diagnostic GET on /me/drive/root:/q.docx confirms the probe
+    # actually fired — that's the regression guard for the silent
+    # classifier degradation.
+    assert any(
+        str(r.url).endswith("/me/drive/root:/q.docx") and r.method == "GET"
+        for r in httpx_mock.get_requests()
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_put_failure_cancels_session_on_any_error(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session cleanup must fire on every PUT-side failure, not just
+    423 — otherwise a transient 5xx leaves an orphan session holding
+    the name reservation. We collapse the 5xx schedule and verify the
+    DELETE follows the exhausted retries."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_5XX_DELAYS_S", (0.0, 0.0, 0.0)
+    )
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
+    httpx_mock.add_response(
+        url=create_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    for _ in range(4):  # initial + 3 retries
+        httpx_mock.add_response(
+            url=_TEST_UPLOAD_URL, method="PUT", status_code=502
+        )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL, method="DELETE", status_code=204
+    )
+
+    with pytest.raises(BackendUnavailableError, match="502"):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    methods = [r.method for r in httpx_mock.get_requests()]
+    assert methods.count("DELETE") == 1
+    # DELETE must come last — after we give up on the PUT.
+    assert methods[-1] == "DELETE"
+
+
+@pytest.mark.asyncio
+async def test_create_upload_session_409_nameAlreadyExists_blocks_v2_rename(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """When SharePoint hasn't released a previous session's name
+    reservation, createUploadSession returns 409 with code
+    ``nameAlreadyExists``. Microsoft's own message says "Change the
+    filename" — which on an LLM client produces a ``_v2.docx`` rename.
+    We override the surface message so the model waits and retries the
+    same file_uri instead."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession",
+        method="POST",
+        status_code=409,
+        json={
+            "error": {
+                "code": "nameAlreadyExists",
+                "message": "Another file exists with the same name as the "
+                "uploaded session.",
+            }
+        },
+    )
+
+    with pytest.raises(
+        BackendUnavailableError, match="releasing a name reservation"
+    ):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
 
 
 @pytest.mark.asyncio
