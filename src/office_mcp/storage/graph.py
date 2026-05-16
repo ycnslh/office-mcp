@@ -49,7 +49,7 @@ log = structlog.get_logger(__name__)
 def _extract_bearer(headers: Any) -> str | None:
     """Pull the bearer token out of an Authorization header dict.
 
-    Used to keep the diagnostic GET in ``_retry_on_423`` self-contained
+    Used to keep the diagnostic GET in ``_retry_transient`` self-contained
     without changing the signature of every caller.
     """
     if not isinstance(headers, dict):
@@ -58,6 +58,46 @@ def _extract_bearer(headers: Any) -> str | None:
     if not isinstance(auth, str) or not auth.startswith("Bearer "):
         return None
     return auth.removeprefix("Bearer ").strip() or None
+
+
+def _extract_error_code(response: httpx.Response) -> str | None:
+    """Pull ``error.code`` from a Graph error response body.
+
+    Graph encodes structured errors as ``{"error": {"code": "...",
+    "message": "..."}}``. Returns ``None`` when the body isn't JSON,
+    isn't shaped that way, or the field is missing — callers fall back
+    to other classification heuristics.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    err = payload.get("error")
+    if not isinstance(err, dict):
+        return None
+    code = err.get("code")
+    return code if isinstance(code, str) and code else None
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Convert a Retry-After header into seconds.
+
+    Microsoft Graph returns Retry-After as an integer-seconds string on
+    429 responses. The RFC also permits an HTTP-date form; we don't
+    bother supporting it because Graph doesn't use it and parsing a
+    date here would just be dead code. Returns ``None`` when the header
+    is absent or unparseable.
+    """
+    value = response.headers.get("Retry-After")
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
 
 _SCHEME = "od"
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -83,6 +123,25 @@ _MAX_UPLOAD_SESSION_BYTES = 60 * 1024 * 1024
 #: tool timeout while covering most real lock durations.
 _RETRY_LOCKED_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
 
+#: Microsoft documents 500/502/503/504 as retriable on upload-session
+#: endpoints with exponential backoff. We apply the same to every
+#: Graph request because the upstream service is the same. Schedule
+#: kept short so a sequence of unrelated retries doesn't blow past
+#: the 120 s MCP tool timeout when stacked with the 423 budget.
+_RETRY_5XX_DELAYS_S: tuple[float, ...] = (0.5, 1.0, 2.0)
+
+#: 5xx status codes Microsoft documents as retriable. 507 (quota) and
+#: other 5xx are NOT retried — they're permanent until external
+#: action (free space, fix config).
+_RETRIABLE_5XX: frozenset[int] = frozenset({500, 502, 503, 504})
+
+#: Upper bound on a server-instructed 429 ``Retry-After`` delay we'll
+#: honor inline. Beyond this, surface the 429 to the caller rather
+#: than blocking the MCP tool call for ages — the LLM message tells
+#: the user when to retry. Sized to stay below LibreChat's 120 s
+#: timeout even when stacked with one 423 budget.
+_MAX_RETRY_AFTER_S: float = 30.0
+
 #: A 423 on a file whose ``lastModifiedDateTime`` is older than this
 #: cannot be the post-write indexing lock (that window is tens of
 #: seconds at worst). The remaining cause is an external coauthoring
@@ -91,6 +150,31 @@ _RETRY_LOCKED_DELAYS_S: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
 #: we short-circuit with an actionable message instead of burning the
 #: 31 s retry budget for nothing.
 _EXTERNAL_LOCK_AGE_S: float = 90.0
+
+#: Documented Graph ``error.code`` values on a 423 that signal a
+#: condition no server-side retry can clear. Drawn from the
+#: ``assignSensitivityLabel`` / ``extractSensitivityLabels`` API
+#: contracts plus the WOPI lock-mismatch family surfaced on writes
+#: when an external editor holds the file. When the response body
+#: carries one of these, we short-circuit with an actionable message
+#: instead of waiting out the 423 retry budget.
+_PERMANENT_LOCK_CODES: frozenset[str] = frozenset({
+    "fileDoubleKeyEncrypted",
+    "fileDecryptionNotSupported",
+    "irmEnforcementFailed",
+    "lockMismatch",
+    "wopiLockMismatch",
+    "resourceModified",
+})
+
+#: 423 ``error.code`` values that Graph explicitly documents as
+#: transient (the file is being processed and will become available).
+#: Matching one of these skips the mtime heuristic and stays in the
+#: retry loop.
+_TRANSIENT_LOCK_CODES: frozenset[str] = frozenset({
+    "fileDecryptionDeferred",
+    "resourceLocked",
+})
 
 
 class GraphBackend(StorageBackend):
@@ -218,7 +302,7 @@ class GraphBackend(StorageBackend):
                 f"OneDrive quota exhausted for {uri}"
             )
         if status == 423:
-            # The bounded retry in ``_retry_on_423`` exhausted itself —
+            # The bounded retry in ``_retry_transient`` exhausted itself —
             # OneDrive is still holding the lock (typically AV scan or
             # Office Online preview generation after a fresh write).
             # Spell out the cause so the LLM waits-and-retries instead
@@ -238,8 +322,10 @@ class GraphBackend(StorageBackend):
         token = self._require_token(user_ctx)
         path = self._path_from_uri(uri)
         url = self._drive_url(path, suffix="content")
-        response = await self._client.get(
+        response = await self._retry_transient(
+            "GET",
             url,
+            uri,
             headers={"Authorization": f"Bearer {token}"},
             # Graph 302s the bytes onto a short-lived CDN URL.
             follow_redirects=True,
@@ -299,9 +385,10 @@ class GraphBackend(StorageBackend):
                 f"not yet wired"
             )
 
-        # Step 1 — open the upload session. Still wrapped in _retry_on_423
+        # Step 1 — open the upload session. Still wrapped in _retry_transient
         # because Graph can occasionally 423 the session-create endpoint
-        # itself; the same classifier triggers if it's a coauthoring lock.
+        # itself; the same classifier triggers if it's a coauthoring lock,
+        # and 5xx/429 on session create are retried with their own schedule.
         session_url = self._drive_url(path, suffix="createUploadSession")
         session_body: dict[str, Any] = {
             "item": {
@@ -312,7 +399,7 @@ class GraphBackend(StorageBackend):
                 "name": path.split("/")[-1],
             },
         }
-        session_response = await self._retry_on_423(
+        session_response = await self._retry_transient(
             "POST",
             session_url,
             effective_uri,
@@ -330,84 +417,140 @@ class GraphBackend(StorageBackend):
         # Step 2 — single-shot ranged PUT to the pre-signed uploadUrl.
         # CRITICAL: the uploadUrl is pre-signed; do NOT add an
         # Authorization header (Microsoft docs explicitly forbid it).
+        # The 423-classifier inside _retry_transient sees no bearer
+        # token in the headers and skips the diagnostic mtime probe,
+        # which is what we want — the upload URL isn't a driveItem path.
         upload_headers: dict[str, str] = {
             "Content-Length": str(size),
             "Content-Range": f"bytes 0-{size - 1}/{size}",
         }
         if if_match is not None:
             upload_headers["If-Match"] = if_match
-        upload_response = await self._client.put(
+        upload_response = await self._retry_transient(
+            "PUT",
             upload_url,
+            effective_uri,
             content=data,
             headers=upload_headers,
         )
         self._raise_for_status(upload_response, effective_uri)
         return self._to_metadata(effective_uri, upload_response.json())
 
-    async def _retry_on_423(
+    async def _retry_transient(
         self,
         method: str,
         url: str,
         uri: str,
         **request_kwargs: Any,
     ) -> httpx.Response:
-        """Issue a Graph request, retrying through the brief 423 lock window.
+        """Issue a Graph request, absorbing transient failures inline.
 
-        Two distinct lock conditions surface as HTTP 423 from Graph:
+        Three Graph failure modes are documented as transient and are
+        handled here so the LLM never has to recover from them:
 
-        1. **Transient post-write lock** — SharePoint runs AV scan and
-           preview generation after every successful write. Lasts tens
-           of seconds; absorbed transparently via the retry schedule.
-        2. **External coauthoring lock** — Word Online, OneDrive
-           desktop, or Office Mobile holds an exclusive handle on the
-           file. Lasts as long as the external session stays open
-           (minutes to hours). No server-side retry will release it.
+        1. **HTTP 423 ``resourceLocked``** — Two sub-cases. The
+           *post-write* lock comes from SharePoint's AV scan + preview
+           generation pipeline and lasts tens of seconds; we sleep
+           through it on the :data:`_RETRY_LOCKED_DELAYS_S` schedule.
+           The *external coauthoring* lock is held by an open Word
+           Online / OneDrive desktop session and can't be released
+           server-side; we short-circuit with an actionable message.
+           Classification reads the response body's
+           ``error.code`` first (Microsoft documents specific codes
+           per sub-case), then falls back to a ``lastModifiedDateTime``
+           probe when the code is unknown or absent.
 
-        On the first 423 we probe the file's ``lastModifiedDateTime``
-        to distinguish the two: a file modified seconds ago is in (1),
-        a file modified minutes ago and still 423-ing is in (2). For
-        (2) we short-circuit with an actionable error so the LLM
-        relays the real fix ("close the open Word tab") instead of
-        wasting the retry budget.
+        2. **HTTP 429 Too Many Requests** — Graph throttles delegated
+           ``/me/drive`` aggressively. Per Microsoft best practices we
+           honor the ``Retry-After`` header instead of asking the LLM
+           to wait, but cap the inline wait at
+           :data:`_MAX_RETRY_AFTER_S` to keep the MCP tool call inside
+           LibreChat's 120 s timeout — beyond that, surface the 429
+           with the original Retry-After hint for the LLM to relay.
+
+        3. **HTTP 500 / 502 / 503 / 504** — Documented as retriable
+           on upload-session endpoints with exponential backoff. We
+           apply the same to every Graph request through
+           :data:`_RETRY_5XX_DELAYS_S`. Other 5xx (notably 507
+           ``Insufficient Storage``) are *not* retried — they're
+           permanent until external action.
         """
         token = _extract_bearer(request_kwargs.get("headers"))
-        delays = (0.0, *_RETRY_LOCKED_DELAYS_S)
-        last_idx = len(delays) - 1
-        for idx, delay in enumerate(delays):
-            if delay:
-                await asyncio.sleep(delay)
+        locked_idx = 0
+        fivexx_idx = 0
+        external_lock_probed = False
+        while True:
             response = await self._client.request(method, url, **request_kwargs)
-            if response.status_code != 423:
-                return response
-            # Probe once on the first 423. Subsequent retries don't
-            # re-probe — if it was transient on the first check it stays
-            # transient. Short-circuits when either condition before the
-            # await is false, so the GET only fires when really needed.
-            if (
-                idx == 0
-                and token is not None
-                and await self._is_external_lock(uri, token, response)
-            ):
-                raise BackendUnavailableError(
-                    f"{uri} is currently open in Word Online, OneDrive "
-                    f"desktop, or another Office client (coauthoring "
-                    f"lock). Close the open editor session and retry — "
-                    f"the server cannot release this lock for you."
+            status = response.status_code
+
+            if status == 423:
+                # Body code beats mtime when present — Microsoft
+                # documents specific transient/permanent codes and
+                # parsing them is more reliable than the age heuristic.
+                code = _extract_error_code(response)
+                if code in _PERMANENT_LOCK_CODES:
+                    raise BackendUnavailableError(
+                        f"{uri} is locked by an external session "
+                        f"(Graph code={code!r}). Close the open editor "
+                        f"(Word Online, OneDrive desktop, Office "
+                        f"Mobile) and retry — the server cannot "
+                        f"release this lock for you."
+                    )
+                if (
+                    code not in _TRANSIENT_LOCK_CODES
+                    and not external_lock_probed
+                    and token is not None
+                    and await self._is_external_lock(uri, token, response)
+                ):
+                    raise BackendUnavailableError(
+                        f"{uri} is currently open in Word Online, "
+                        f"OneDrive desktop, or another Office client "
+                        f"(coauthoring lock). Close the open editor "
+                        f"session and retry — the server cannot "
+                        f"release this lock for you."
+                    )
+                external_lock_probed = True
+                if locked_idx >= len(_RETRY_LOCKED_DELAYS_S):
+                    return response
+                delay = _RETRY_LOCKED_DELAYS_S[locked_idx]
+                locked_idx += 1
+                log.info(
+                    "graph.resource_locked.retry",
+                    uri=uri,
+                    method=method,
+                    next_delay_s=delay,
+                    error_code=code,
                 )
-            if idx == last_idx:
-                # Retry budget exhausted — surface the final 423 to the
-                # caller so ``_raise_for_status`` turns it into the
-                # "still indexing" message.
-                return response
-            log.info(
-                "graph.resource_locked.retry",
-                uri=uri,
-                method=method,
-                next_delay_s=delay,
-            )
-        # Unreachable: the loop always returns on either success, external
-        # lock, or exhausted budget. This satisfies the type checker.
-        raise RuntimeError("retry loop completed without returning")
+                await asyncio.sleep(delay)
+                continue
+
+            if status == 429:
+                retry_after = _parse_retry_after(response)
+                if retry_after is None or retry_after > _MAX_RETRY_AFTER_S:
+                    return response
+                log.info(
+                    "graph.throttled.retry_after_honored",
+                    uri=uri,
+                    method=method,
+                    retry_after_s=retry_after,
+                )
+                await asyncio.sleep(retry_after)
+                continue
+
+            if status in _RETRIABLE_5XX and fivexx_idx < len(_RETRY_5XX_DELAYS_S):
+                delay = _RETRY_5XX_DELAYS_S[fivexx_idx]
+                fivexx_idx += 1
+                log.info(
+                    "graph.transient_5xx.retry",
+                    uri=uri,
+                    method=method,
+                    status=status,
+                    next_delay_s=delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            return response
 
     async def _is_external_lock(
         self,
@@ -467,8 +610,10 @@ class GraphBackend(StorageBackend):
     async def stat(self, uri: str, *, user_ctx: UserContext) -> FileMetadata:
         token = self._require_token(user_ctx)
         path = self._path_from_uri(uri)
-        response = await self._client.get(
+        response = await self._retry_transient(
+            "GET",
             self._drive_url(path),
+            uri,
             headers={"Authorization": f"Bearer {token}"},
         )
         self._raise_for_status(response, uri)
@@ -499,8 +644,11 @@ class GraphBackend(StorageBackend):
                 else self._drive_url(folder_path, suffix="children")
             )
             while url:
-                response = await self._client.get(
-                    url, headers={"Authorization": f"Bearer {token}"}
+                response = await self._retry_transient(
+                    "GET",
+                    url,
+                    uri_prefix,
+                    headers={"Authorization": f"Bearer {token}"},
                 )
                 self._raise_for_status(response, uri_prefix)
                 payload = response.json()
@@ -520,7 +668,7 @@ class GraphBackend(StorageBackend):
         # PUT — the file the LLM just created stays locked for tens of
         # seconds while SharePoint indexes it, and a delete issued in
         # that window fails. Reuse the same retry strategy as write().
-        response = await self._retry_on_423(
+        response = await self._retry_transient(
             "DELETE",
             self._drive_url(path),
             uri,

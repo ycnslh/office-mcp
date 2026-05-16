@@ -671,7 +671,7 @@ async def test_delete_retries_through_brief_resource_lock(
 ) -> None:
     """DELETE hits the same post-write 423 lock as PUT — the LLM
     asking to remove a file it just created would otherwise see a hard
-    BackendUnavailableError. Reuses ``_retry_on_423`` like ``write``."""
+    BackendUnavailableError. Reuses ``_retry_transient`` like ``write``."""
     monkeypatch.setattr(
         "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
     )
@@ -1015,31 +1015,197 @@ async def test_health_check_raises_on_5xx(
 
 @pytest.mark.asyncio
 async def test_5xx_maps_to_backend_unavailable(
-    backend: GraphBackend, httpx_mock: HTTPXMock
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    httpx_mock.add_response(
-        url=f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content",
-        method="GET",
-        status_code=502,
-        text="bad gateway",
+    """A 5xx that persists through the retry budget must still surface
+    as ``BackendUnavailableError`` so the LLM doesn't silently swallow
+    it. We collapse the backoff schedule to keep the test fast."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_5XX_DELAYS_S", (0.0, 0.0, 0.0)
     )
+    url = f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content"
+    for _ in range(4):  # initial attempt + 3 retries
+        httpx_mock.add_response(
+            url=url, method="GET", status_code=502, text="bad gateway"
+        )
     with pytest.raises(BackendUnavailableError, match="502"):
         await backend.read("od://x.txt", user_ctx=_user("AT"))
 
 
 @pytest.mark.asyncio
-async def test_429_surfaces_retry_after(
+async def test_429_above_cap_surfaces_retry_after(
     backend: GraphBackend, httpx_mock: HTTPXMock
 ) -> None:
-    """Graph throttles aggressively; the LLM needs the Retry-After hint."""
+    """Retry-After above ``_MAX_RETRY_AFTER_S`` is too long to absorb
+    inline (would blow past LibreChat's 120 s tool timeout). We surface
+    the 429 with the hint so the LLM tells the user when to retry."""
     httpx_mock.add_response(
         url=f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content",
         method="GET",
         status_code=429,
-        headers={"Retry-After": "12"},
+        headers={"Retry-After": "60"},
     )
-    with pytest.raises(BackendUnavailableError, match="retry after 12"):
+    with pytest.raises(BackendUnavailableError, match="retry after 60"):
         await backend.read("od://x.txt", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_5xx_retried_then_succeeds(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handful of transient 5xx that clear within the retry budget
+    must not surface to the LLM at all — that's the whole point of the
+    retry. Mirrors Microsoft's documented best practice for upload
+    sessions (retry 500/502/503/504 with exponential backoff)."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_5XX_DELAYS_S", (0.0, 0.0, 0.0)
+    )
+    url = f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content"
+    httpx_mock.add_response(url=url, method="GET", status_code=503)
+    httpx_mock.add_response(url=url, method="GET", status_code=502)
+    httpx_mock.add_response(url=url, method="GET", content=b"finally")
+
+    data = await backend.read("od://x.txt", user_ctx=_user("AT"))
+
+    assert data == b"finally"
+
+
+@pytest.mark.asyncio
+async def test_504_retried_alongside_other_5xx(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """504 Gateway Timeout is part of the retriable set per MS upload-
+    session best practices. Lock the contract so a future refactor of
+    ``_RETRIABLE_5XX`` doesn't drop it silently."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_5XX_DELAYS_S", (0.0, 0.0, 0.0)
+    )
+    url = f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content"
+    httpx_mock.add_response(url=url, method="GET", status_code=504)
+    httpx_mock.add_response(url=url, method="GET", content=b"ok")
+
+    data = await backend.read("od://x.txt", user_ctx=_user("AT"))
+    assert data == b"ok"
+
+
+@pytest.mark.asyncio
+async def test_429_within_cap_is_honored_and_retried(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """A small Retry-After value is honored inline: the backend sleeps
+    that long, retries, and the LLM never sees the 429. Avoids the
+    failure mode where the LLM gives up on a tool call that would have
+    succeeded after a one-second wait."""
+    url = f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content"
+    httpx_mock.add_response(
+        url=url,
+        method="GET",
+        status_code=429,
+        headers={"Retry-After": "0"},
+    )
+    httpx_mock.add_response(url=url, method="GET", content=b"served")
+
+    data = await backend.read("od://x.txt", user_ctx=_user("AT"))
+
+    assert data == b"served"
+    assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.asyncio
+async def test_429_without_retry_after_surfaces_immediately(
+    backend: GraphBackend, httpx_mock: HTTPXMock
+) -> None:
+    """No Retry-After header means we can't safely guess a delay —
+    surface the 429 with a generic message so the LLM backs off."""
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/x.txt:/content",
+        method="GET",
+        status_code=429,
+    )
+    with pytest.raises(BackendUnavailableError, match="throttled"):
+        await backend.read("od://x.txt", user_ctx=_user("AT"))
+
+
+@pytest.mark.asyncio
+async def test_423_permanent_body_code_short_circuits(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Graph returns a documented permanent lock code in the
+    response body, we trust it over the mtime heuristic and bail out
+    immediately. No diagnostic probe should fire — the body already
+    told us this won't clear on retry."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    httpx_mock.add_response(
+        url=f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession",
+        method="POST",
+        status_code=423,
+        json={
+            "error": {
+                "code": "wopiLockMismatch",
+                "message": "The file is locked by another WOPI client.",
+            }
+        },
+    )
+
+    with pytest.raises(BackendUnavailableError, match="wopiLockMismatch"):
+        await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    # No diagnostic GET should have been issued — the body code is
+    # authoritative.
+    assert len(httpx_mock.get_requests()) == 1
+
+
+@pytest.mark.asyncio
+async def test_423_transient_body_code_skips_mtime_probe(
+    backend: GraphBackend,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A documented transient code keeps us in the retry loop without
+    paying for a mtime probe. The probe only fires when we have no
+    body-level signal to lean on."""
+    monkeypatch.setattr(
+        "office_mcp.storage.graph._RETRY_LOCKED_DELAYS_S", (0.0, 0.0)
+    )
+    create_url = f"{_GRAPH_BASE}/me/drive/root:/q.docx:/createUploadSession"
+    httpx_mock.add_response(
+        url=create_url,
+        method="POST",
+        status_code=423,
+        json={"error": {"code": "resourceLocked", "message": "transient"}},
+    )
+    httpx_mock.add_response(
+        url=create_url,
+        method="POST",
+        json={"uploadUrl": _TEST_UPLOAD_URL},
+    )
+    httpx_mock.add_response(
+        url=_TEST_UPLOAD_URL,
+        method="PUT",
+        json={
+            "size": 1,
+            "lastModifiedDateTime": "2026-04-29T10:00:00Z",
+            "eTag": '"new"',
+            "file": {"mimeType": "application/octet-stream"},
+        },
+    )
+
+    meta = await backend.write("od://q.docx", b"x", user_ctx=_user("AT"))
+
+    assert meta.etag == '"new"'
+    # 2 POSTs + 1 PUT = 3 — no diagnostic GET (body code told us
+    # everything we needed).
+    assert len(httpx_mock.get_requests()) == 3
 
 
 @pytest.mark.asyncio
