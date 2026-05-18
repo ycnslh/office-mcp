@@ -1,0 +1,81 @@
+# ─────────────────────────────────────────────────────────────────────
+# Staging override — second LibreChat instance pinned to v0.8.6-rc1
+# to validate the "Rich File Artifact Previews" pipeline (PR #12934)
+# against our office-mcp without disturbing the production stack.
+#
+# Coexists with the prod `librechat` service: same office-mcp, same
+# MongoDB/Meilisearch (separate DBs/indexes), separate volumes, port
+# 3081 on the host, Traefik route `librechat-staging.reho.dev`.
+#
+# Append to the compose command:
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.librechat.yml \
+#                  -f docker-compose.librechat-staging.yml \
+#                  -f docker-compose.traefik.yml up --build -d
+#
+# Requires the same prerequisites as the prod stack (Traefik on
+# proxy-network, letsencrypt resolver) plus:
+#   - DNS for `librechat-staging.reho.dev` pointing to the host
+#   - Azure AD redirect URI `https://librechat-staging.reho.dev/oauth/openid/callback`
+#     added to the app registration (otherwise SSO fails — fallback is
+#     ALLOW_REGISTRATION=true on staging, see below).
+# ─────────────────────────────────────────────────────────────────────
+
+services:
+  librechat-staging:
+    image: ghcr.io/danny-avila/librechat:${LIBRECHAT_STAGING_VERSION:-v0.8.6-rc1}
+    container_name: librechat-staging
+    restart: unless-stopped
+    depends_on:
+      - mongodb
+      - meilisearch
+      - office-mcp
+    ports:
+      - "${LIBRECHAT_STAGING_PORT:-3081}:3080"
+    environment:
+      - HOST=0.0.0.0
+      # Separate Mongo DB so the staging chats/agents do not collide
+      # with prod users. Same MongoDB container, different database name.
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat-staging
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_NO_ANALYTICS=true
+      - CREDS_KEY=${CREDS_KEY}
+      - CREDS_IV=${CREDS_IV}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
+      # Staging accepts local registration so the PoC tester can sign up
+      # without touching the Azure AD app registration. Set to false and
+      # rely on SSO once the redirect URI is whitelisted on Azure.
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION_STAGING:-true}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ALLOW_SOCIAL_LOGIN=${ALLOW_SOCIAL_LOGIN:-true}
+      - ALLOW_SOCIAL_REGISTRATION=${ALLOW_SOCIAL_REGISTRATION:-true}
+      - OPENID_CLIENT_ID=${OPENID_CLIENT_ID}
+      - OPENID_CLIENT_SECRET=${OPENID_CLIENT_SECRET}
+      - OPENID_ISSUER=${OPENID_ISSUER}
+      - OPENID_SESSION_SECRET=${OPENID_SESSION_SECRET}
+      - OPENID_SCOPE=${OPENID_SCOPE:-openid profile email offline_access Files.ReadWrite}
+      - OPENID_REUSE_TOKENS=${OPENID_REUSE_TOKENS:-true}
+      - OPENID_CALLBACK_URL=${OPENID_CALLBACK_URL:-/oauth/openid/callback}
+      - OPENID_BUTTON_LABEL=${OPENID_BUTTON_LABEL:-Continuer avec Microsoft}
+      - DOMAIN_CLIENT=https://librechat-staging.reho.dev
+      - DOMAIN_SERVER=https://librechat-staging.reho.dev
+    volumes:
+      - ./librechat.yaml.example:/app/librechat.yaml:ro
+      - librechat-staging-images:/app/client/public/images
+      - librechat-staging-uploads:/app/uploads
+    networks:
+      - office-mcp
+      - proxy-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy-network"
+      - "traefik.http.routers.librechat-staging.rule=Host(`librechat-staging.reho.dev`)"
+      - "traefik.http.routers.librechat-staging.entrypoints=websecure"
+      - "traefik.http.routers.librechat-staging.tls.certresolver=letsencrypt"
+      - "traefik.http.services.librechat-staging.loadbalancer.server.port=3080"
+
+volumes:
+  librechat-staging-images:
+  librechat-staging-uploads:

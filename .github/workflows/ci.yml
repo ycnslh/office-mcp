@@ -98,6 +98,9 @@ jobs:
           # LibreChat dev stack
           LIBRECHAT_VERSION=v0.8.5
           LIBRECHAT_PORT=3080
+          # Staging instance (PoC: validate v0.8.6-rc1 Rich File Artifact Previews)
+          LIBRECHAT_STAGING_VERSION=v0.8.6-rc1
+          LIBRECHAT_STAGING_PORT=3081
           CREDS_KEY=c338d5f964ac62bd0cbc6348dc7c8774676b268f083ec020a1c0f6c263789d86
           CREDS_IV=f4391d526676a5e11bca5fef26703a31
           JWT_SECRET=52da6a0d900a72c69160eb5aea07ab281b8bafe1c70666df9d2ef98e47f2468a
@@ -146,11 +149,11 @@ jobs:
 
       - name: Stop existing containers
         run: |
-          docker stop office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
-          docker rm  office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+          docker stop office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+          docker rm  office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
 
       - name: Build and start full stack
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml up --build -d
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml up --build -d
 
       - name: Wait for office-mcp health
         run: |
@@ -164,7 +167,7 @@ jobs:
             sleep 10
             if [ $i -eq 18 ]; then
               echo "office-mcp did not become healthy within 3 minutes"
-              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs office-mcp
+              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs office-mcp
               exit 1
             fi
           done
@@ -181,7 +184,22 @@ jobs:
             sleep 10
           done
           echo "LibreChat did not become healthy within 5 minutes"
-          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs librechat
+          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs librechat
+          exit 1
+
+      - name: Wait for LibreChat staging health
+        run: |
+          echo "Waiting for LibreChat staging on port 3081..."
+          for i in $(seq 1 30); do
+            if curl -sf "http://localhost:3081/api/config" > /dev/null; then
+              echo "LibreChat staging healthy (attempt $i)"
+              exit 0
+            fi
+            echo "  attempt $i/30, retrying in 10s..."
+            sleep 10
+          done
+          echo "LibreChat staging did not become healthy within 5 minutes"
+          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs librechat-staging
           exit 1
 
       - name: Smoke tests
@@ -196,9 +214,13 @@ jobs:
             && echo "PASS  LibreChat /api/config" \
             || { echo "FAIL  LibreChat /api/config"; FAILED=1; }
 
+          curl -sf "http://localhost:3081/api/config" | grep -q '"appTitle"' \
+            && echo "PASS  LibreChat staging /api/config" \
+            || { echo "FAIL  LibreChat staging /api/config"; FAILED=1; }
+
           [ $FAILED -eq 0 ] || exit 1
           echo "All smoke tests passed"
 
       - name: Container status
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml ps
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml ps
