@@ -173,6 +173,15 @@ jobs:
 
           # OpenRouter LLM — only real secret, injected from GitHub
           OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+
+          # Self-hosted Code Interpreter (staging only — PR2).
+          # Hardcoded per the PoC mode comment at line ~107 of this workflow:
+          # repo is private, no real user data, key rotates the day the PoC ends.
+          CODE_INTERPRETER_KEY=fc0a5b6e8d7c4a2f9e1b3d6a8c0e2f4a6b8d0c2e4f6a8b0d2c4e6f8a0b2c4d6e
+          # Garage S3 (object storage backing the code interpreter sandbox).
+          # Internal to the office-mcp Docker network; defaults from upstream.
+          CODE_INTERPRETER_S3_ACCESS_KEY=GKminioadmin0000
+          CODE_INTERPRETER_S3_SECRET_KEY=minioadminsecret
           EOF
 
       - name: Validate required secrets are present
@@ -190,8 +199,8 @@ jobs:
 
       - name: Stop existing containers
         run: |
-          docker stop office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
-          docker rm  office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+          docker stop office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch code-interpreter-staging code-interpreter-redis code-interpreter-garage 2>/dev/null || true
+          docker rm  office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch code-interpreter-staging code-interpreter-redis code-interpreter-garage 2>/dev/null || true
 
       - name: Build and start full stack
         run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml up --build -d
@@ -234,13 +243,34 @@ jobs:
           for i in $(seq 1 30); do
             if curl -sf "http://localhost:3081/api/config" > /dev/null; then
               echo "LibreChat staging healthy (attempt $i)"
+              break
+            fi
+            echo "  attempt $i/30, retrying in 10s..."
+            sleep 10
+            if [ $i -eq 30 ]; then
+              echo "LibreChat staging did not become healthy within 5 minutes"
+              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs librechat-staging
+              exit 1
+            fi
+          done
+
+      - name: Wait for code-interpreter staging health
+        # No host port — probe through `docker exec` into the container and
+        # validate office_doctrine is importable + producing real bytes.
+        # 30 × 10s = 5 min. First boot does a `docker compose build` of the
+        # custom image, which is the slowest path here.
+        run: |
+          echo "Waiting for code-interpreter-staging via internal exec..."
+          for i in $(seq 1 30); do
+            if docker exec code-interpreter-staging python3 -c "from office_doctrine import docx; out = docx.compose(title='T', blocks=[]); assert len(out) > 1000" 2>/dev/null; then
+              echo "code-interpreter-staging healthy + office_doctrine OK (attempt $i)"
               exit 0
             fi
             echo "  attempt $i/30, retrying in 10s..."
             sleep 10
           done
-          echo "LibreChat staging did not become healthy within 5 minutes"
-          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs librechat-staging
+          echo "code-interpreter-staging never became healthy"
+          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs code-interpreter-staging
           exit 1
 
       - name: Smoke tests
@@ -258,6 +288,10 @@ jobs:
           curl -sf "http://localhost:3081/api/config" | grep -q '"appTitle"' \
             && echo "PASS  LibreChat staging /api/config" \
             || { echo "FAIL  LibreChat staging /api/config"; FAILED=1; }
+
+          docker exec code-interpreter-staging libreoffice --version > /dev/null 2>&1 \
+            && echo "PASS  code-interpreter libreoffice --version" \
+            || { echo "FAIL  code-interpreter libreoffice --version"; FAILED=1; }
 
           [ $FAILED -eq 0 ] || exit 1
           echo "All smoke tests passed"
