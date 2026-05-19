@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 mkdir -p dist
 rm -f dist/*.zip
 
-for dir in office-*-rules; do
+for dir in office-docx office-xlsx office-pptx; do
   [ -d "$dir" ] || continue
   (cd "$dir" && zip -qr "../dist/${dir}.zip" .)
   echo "built dist/${dir}.zip"
