@@ -26,6 +26,9 @@ RUN pip install "poetry==${POETRY_VERSION}"
 WORKDIR /app
 COPY pyproject.toml ./
 COPY README.md ./
+# Path-develop dep on office-doctrine: poetry needs the sub-package present
+# before `install --no-root`, otherwise the path resolution fails.
+COPY packages ./packages
 RUN poetry install --only main --no-root --no-ansi
 
 COPY src ./src

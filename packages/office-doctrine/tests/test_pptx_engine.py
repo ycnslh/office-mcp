@@ -7,7 +7,7 @@ from io import BytesIO
 import pytest
 from pptx import Presentation
 
-from office_mcp.engines import pptx_engine
+from office_doctrine import pptx as pptx_engine
 
 
 def test_compose_returns_valid_pptx_bytes() -> None:
