@@ -41,7 +41,7 @@ def main() -> int:
     from office_doctrine import docx as od_docx
 
     payload = od_docx.compose(title="t", blocks=[])
-    if not isinstance(payload, (bytes, bytearray)):
+    if not isinstance(payload, bytes | bytearray):
         print(f"FAIL  office_doctrine.docx.compose returned {type(payload).__name__}, expected bytes")
         return 1
     if len(payload) <= 1000:
