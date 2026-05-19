@@ -48,6 +48,47 @@ jobs:
               && poetry run ruff check . \
               && poetry run pytest -v --tb=short -p no:cacheprovider"
 
+  # ─── office-doctrine wheel build (every PR + push) ────────────────────────
+  # Builds the standalone lib + uploads the wheel as a CI artifact so it can
+  # be downloaded by the LibreCodeInterpreter image build (PR2). Runs in
+  # parallel with `test` for fast feedback.
+  build-doctrine:
+    name: Build office-doctrine wheel
+    runs-on: self-hosted
+    steps:
+      - name: Clean root-owned caches from previous runs
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            python:3.12-slim \
+            sh -c "find /workspace -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache -o -name .venv -o -name dist \) -exec rm -rf {} + 2>/dev/null; exit 0"
+
+      - uses: actions/checkout@v4
+
+      - name: Build wheel
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            --env HOME=/tmp \
+            --env POETRY_VIRTUALENVS_IN_PROJECT=true \
+            --env POETRY_NO_INTERACTION=1 \
+            -v ${{ github.workspace }}:/app \
+            -w /app/packages/office-doctrine \
+            python:3.12-slim \
+            sh -c "export PATH=/tmp/.local/bin:\$PATH \
+              && pip install --quiet --user poetry==1.8.4 \
+              && poetry install --with dev --no-ansi \
+              && poetry run pytest -v --tb=short -p no:cacheprovider \
+              && poetry build --no-ansi"
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: office-doctrine-wheel
+          path: packages/office-doctrine/dist/*.whl
+          if-no-files-found: error
+          retention-days: 30
+
   # ─── Image build verification (every PR + push) ───────────────────────────
   # Catches Dockerfile regressions before they hit main. No registry push —
   # image stays local on the runner per PoC choice.

@@ -8,7 +8,7 @@ import pytest
 from docx import Document
 from docx.oxml.ns import qn
 
-from office_mcp.engines import docx_engine
+from office_doctrine import docx as docx_engine
 
 
 def test_compose_returns_valid_docx_bytes() -> None:

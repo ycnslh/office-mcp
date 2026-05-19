@@ -7,8 +7,8 @@ from io import BytesIO
 import openpyxl
 import pytest
 
-from office_mcp.engines import xlsx_engine
-from office_mcp.utils import libreoffice
+from office_doctrine import _libreoffice as libreoffice
+from office_doctrine import xlsx as xlsx_engine
 
 _NEEDS_SOFFICE = pytest.mark.skipif(
     not libreoffice.is_available(),
