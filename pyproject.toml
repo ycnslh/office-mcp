@@ -43,14 +43,14 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src", "tests", "packages/office-doctrine/src", "packages/office-doctrine/tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "C4", "PTH", "SIM"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["office_mcp"]
+known-first-party = ["office_mcp", "office_doctrine"]
 
 [tool.ruff.lint.per-file-ignores]
 # Asserts and token-shaped literals are expected in tests, both in the
