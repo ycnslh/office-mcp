@@ -30,6 +30,7 @@ services:
       - mongodb
       - meilisearch
       - office-mcp
+      - code-interpreter-staging
     ports:
       - "${LIBRECHAT_STAGING_PORT:-3081}:3080"
     environment:
@@ -44,6 +45,11 @@ services:
       - JWT_SECRET=${JWT_SECRET}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
       - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
+      # Self-hosted Code Interpreter (PR2) — points LibreChat at our
+      # custom LibreCodeInterpreter image with office_doctrine preinstalled.
+      # Internal-only: resolved over the office-mcp Docker network, no host port.
+      - LIBRECHAT_CODE_BASEURL=http://code-interpreter-staging:8000
+      - LIBRECHAT_CODE_API_KEY=${CODE_INTERPRETER_KEY}
       # Staging accepts local registration so the PoC tester can sign up
       # without touching the Azure AD app registration. Set to false and
       # rely on SSO once the redirect URI is whitelisted on Azure.
@@ -76,6 +82,110 @@ services:
       - "traefik.http.routers.librechat-staging.tls.certresolver=letsencrypt"
       - "traefik.http.services.librechat-staging.loadbalancer.server.port=3080"
 
+  # ─────────────────────────────────────────────────────────────────────
+  # Code Interpreter stack (staging only) — PR2 of the pivot to skills.
+  # Image is built locally on the pixel runner from docker/code-interpreter/
+  # which extends ghcr.io/usnavy13/librecodeinterpreter:main with the
+  # office-doctrine wheel (and nothing else).
+  #
+  # No host port. No Traefik label. Only librechat-staging on the internal
+  # `office-mcp` network talks to it. Prod LibreChat and office-mcp are
+  # untouched by this section.
+  # ─────────────────────────────────────────────────────────────────────
+  code-interpreter-staging:
+    build:
+      context: .
+      dockerfile: docker/code-interpreter/Dockerfile
+    image: office-code-interpreter:staging
+    container_name: code-interpreter-staging
+    restart: unless-stopped
+    depends_on:
+      code-interpreter-redis:
+        condition: service_healthy
+      code-interpreter-garage:
+        condition: service_healthy
+    # tini reaps zombie nsjail/python child processes — required by upstream.
+    init: true
+    # nsjail needs SYS_ADMIN to create namespaces/cgroups, NET_ADMIN to
+    # install iptables egress rules. apparmor:unconfined is also required.
+    # See https://github.com/usnavy13/LibreCodeInterpreter/blob/main/docker-compose.yml
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    tmpfs:
+      - /tmp:size=512m,mode=1777,noexec,nosuid,nodev
+      - /app/data:size=100m
+    environment:
+      # Single API key for both x-api-key and LibreChat Basic auth paths.
+      - API_KEY=${CODE_INTERPRETER_KEY}
+      - REDIS_HOST=code-interpreter-redis
+      - REDIS_PORT=6379
+      - S3_ENDPOINT=code-interpreter-garage:3900
+      - S3_ACCESS_KEY=${CODE_INTERPRETER_S3_ACCESS_KEY:-GKminioadmin0000}
+      - S3_SECRET_KEY=${CODE_INTERPRETER_S3_SECRET_KEY:-minioadminsecret}
+      - S3_BUCKET=code-interpreter-files
+      - LOG_LEVEL=INFO
+      - LOG_FORMAT=json
+    volumes:
+      - code-interpreter-sandbox:/var/lib/code-interpreter/sandboxes
+      - code-interpreter-skill-deps:/opt/skill-deps
+    networks:
+      # Internal only. No proxy-network → no Traefik exposure.
+      - office-mcp
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  code-interpreter-redis:
+    image: redis:7-alpine
+    container_name: code-interpreter-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - code-interpreter-redis-data:/data
+    networks:
+      - office-mcp
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  code-interpreter-garage:
+    image: dxflrs/garage:v2.3.0
+    container_name: code-interpreter-garage
+    restart: unless-stopped
+    command: /garage server --single-node --default-bucket
+    environment:
+      GARAGE_DEFAULT_ACCESS_KEY: ${CODE_INTERPRETER_S3_ACCESS_KEY:-GKminioadmin0000}
+      GARAGE_DEFAULT_SECRET_KEY: ${CODE_INTERPRETER_S3_SECRET_KEY:-minioadminsecret}
+      GARAGE_DEFAULT_BUCKET: code-interpreter-files
+    volumes:
+      - code-interpreter-garage-data:/var/lib/garage
+      - ./docker/code-interpreter/garage.toml:/etc/garage.toml:ro
+    networks:
+      - office-mcp
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   librechat-staging-images:
   librechat-staging-uploads:
+  code-interpreter-sandbox:
+  code-interpreter-skill-deps:
+  code-interpreter-redis-data:
+  code-interpreter-garage-data:
