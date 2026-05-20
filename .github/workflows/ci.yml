@@ -50,6 +50,7 @@ jobs:
               - 'skills/**'
             deployment:
               - 'deployment/**'
+              - '.github/workflows/**'
 
   # ─── Unit tests ────────────────────────────────────────────────────────────
   test:
