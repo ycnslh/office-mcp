@@ -142,7 +142,6 @@ jobs:
       - name: Build skill zips
         run: |
           docker run --rm \
-            --user $(id -u):$(id -g) \
             -v ${{ github.workspace }}/skills:/skills \
             -w /skills \
             debian:bookworm-slim \
