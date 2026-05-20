@@ -37,7 +37,8 @@ cp .env.example .env
 # OPENROUTER_API_KEY, and the LibreChat secrets.
 
 # 2. Bring the stack up
-docker compose -f docker-compose.yml -f docker-compose.librechat.yml up --build
+docker compose -f deployment/compose/docker-compose.yml \
+               -f deployment/compose/docker-compose.librechat.yml up --build
 
 #   → office-mcp  : http://localhost:18080
 #   → LibreChat   : http://localhost:3080  (register a user, start chatting)
@@ -49,10 +50,10 @@ In the chat, tools are discoverable via the **Serveurs MCP** menu as
 
 ## Integrating into an existing LibreChat deployment
 
-Copy the two drop-in files into the client's LibreChat project:
+Copy the drop-in files into the client's LibreChat project:
 
-- [`docker-compose.librechat.override.yml.example`](./docker-compose.librechat.override.yml.example)
-- [`librechat.yaml.example`](./librechat.yaml.example)
+- [`deployment/librechat.yaml.example`](./deployment/librechat.yaml.example)
+- The compose snippets in [`deployment/compose/`](./deployment/compose/)
 
 Full walkthrough in
 [`docs/librechat-integration.md`](./docs/librechat-integration.md),

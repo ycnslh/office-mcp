@@ -18,19 +18,20 @@ download link appears in the conversation.
 
 ## 1. Build (or pull) the office-mcp image
 
-From this repo:
+From this repo (build context is the repo root, the Dockerfile lives
+under `deployment/docker/`):
 
 ```bash
-docker build -t office-mcp:latest .
+docker build -f deployment/docker/mcp-server.Dockerfile -t office-mcp:latest .
 ```
 
 Or pull it from your internal registry if you publish it.
 
 ## 2. Drop-in override for the LibreChat stack
 
-Copy [`docker-compose.librechat.override.yml.example`](../docker-compose.librechat.override.yml.example)
-into the directory that hosts the client's LibreChat
-`docker-compose.yml` and rename it `docker-compose.override.yml`.
+Use the snippets in [`deployment/compose/`](../deployment/compose/) as
+templates for the override you drop into the directory that hosts the
+client's LibreChat `docker-compose.yml`.
 
 Set three environment variables before `docker compose up`:
 
@@ -52,7 +53,7 @@ override to match.
 ## 3. Merge the librechat.yaml snippet
 
 In the LibreChat project's `librechat.yaml`, append the blocks from
-[`librechat.yaml.example`](../librechat.yaml.example):
+[`deployment/librechat.yaml.example`](../deployment/librechat.yaml.example):
 
 - `endpoints.custom` — adds OpenRouter as an OpenAI-compatible endpoint.
   Omit if OpenRouter isn't needed.

@@ -8,10 +8,10 @@
 # 3081 on the host, Traefik route `librechat-staging.reho.dev`.
 #
 # Append to the compose command:
-#   docker compose -f docker-compose.yml \
-#                  -f docker-compose.librechat.yml \
-#                  -f docker-compose.librechat-staging.yml \
-#                  -f docker-compose.traefik.yml up --build -d
+#   docker compose -f deployment/compose/docker-compose.yml \
+#                  -f deployment/compose/docker-compose.librechat.yml \
+#                  -f deployment/compose/docker-compose.librechat-staging.yml \
+#                  -f deployment/compose/docker-compose.traefik.yml up --build -d
 #
 # Requires the same prerequisites as the prod stack (Traefik on
 # proxy-network, letsencrypt resolver) plus:
@@ -68,7 +68,7 @@ services:
       - DOMAIN_CLIENT=https://librechat-staging.reho.dev
       - DOMAIN_SERVER=https://librechat-staging.reho.dev
     volumes:
-      - ./librechat.yaml.example:/app/librechat.yaml:ro
+      - ../librechat.yaml.example:/app/librechat.yaml:ro
       - librechat-staging-images:/app/client/public/images
       - librechat-staging-uploads:/app/uploads
     networks:
@@ -94,8 +94,8 @@ services:
   # ─────────────────────────────────────────────────────────────────────
   code-interpreter-staging:
     build:
-      context: .
-      dockerfile: docker/code-interpreter/Dockerfile
+      context: ../..
+      dockerfile: deployment/docker/code-interpreter/Dockerfile
     image: office-code-interpreter:staging
     container_name: code-interpreter-staging
     restart: unless-stopped
@@ -172,7 +172,7 @@ services:
       GARAGE_DEFAULT_BUCKET: code-interpreter-files
     volumes:
       - code-interpreter-garage-data:/var/lib/garage
-      - ./docker/code-interpreter/garage.toml:/etc/garage.toml:ro
+      - ../docker/code-interpreter/garage.toml:/etc/garage.toml:ro
     networks:
       - office-mcp
     healthcheck:

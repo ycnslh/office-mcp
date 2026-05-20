@@ -12,14 +12,15 @@
 #   nothing else — so LibreChat skills can `import office_doctrine` from
 #   inside the sandbox without bundling the lib in every skill zip.
 #
-# Build context: MUST be the repo root, not docker/code-interpreter/.
+# Build context: MUST be the repo root, not deployment/docker/code-interpreter/.
 # The first stage needs access to packages/office-doctrine/ to build
 # the wheel. Build command:
 #
-#   docker build -f docker/code-interpreter/Dockerfile \
+#   docker build -f deployment/docker/code-interpreter/Dockerfile \
 #                -t office-code-interpreter:test .
 #
-# (This is what the compose service does via `context: ., dockerfile: …`.)
+# (This is what the compose service does via
+#  `context: ../.., dockerfile: deployment/docker/code-interpreter/Dockerfile`.)
 # ─────────────────────────────────────────────────────────────────────
 
 ARG PYTHON_VERSION=3.12
@@ -69,7 +70,7 @@ RUN pip install --break-system-packages --no-cache-dir /wheels/*.whl \
  && rm -rf /wheels /root/.cache/pip
 
 # Smoke script for local validation: `docker run --rm IMAGE python /smoke.py`
-COPY docker/code-interpreter/smoke.py /smoke.py
+COPY deployment/docker/code-interpreter/smoke.py /smoke.py
 
 # Inherit ENTRYPOINT / CMD / EXPOSE / HEALTHCHECK from the upstream image
 # (CMD ["python3", "-m", "src.main"], EXPOSE 8000). Do not redefine them

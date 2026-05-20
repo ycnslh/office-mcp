@@ -23,4 +23,5 @@ output
 tmp
 *.log
 docker-compose*.yml
+deployment/compose
 CLAUDE.md
