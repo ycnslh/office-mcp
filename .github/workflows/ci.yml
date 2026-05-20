@@ -12,16 +12,51 @@ env:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # ─── Change detection ─────────────────────────────────────────────────────
+  # Path-filtered routing so PRs that only touch one slice of the monorepo
+  # don't trigger every job. Outputs feed every downstream `if:` guard.
+  # workflow_dispatch bypasses the filter (everything runs).
+  changes:
+    name: Detect changes
+    runs-on: self-hosted
+    outputs:
+      mcp: ${{ steps.filter.outputs.mcp }}
+      doctrine: ${{ steps.filter.outputs.doctrine }}
+      skills: ${{ steps.filter.outputs.skills }}
+      deployment: ${{ steps.filter.outputs.deployment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            mcp:
+              - 'src/office_mcp/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'poetry.lock'
+              - 'deployment/docker/mcp-server.Dockerfile'
+            doctrine:
+              - 'packages/office-doctrine/**'
+            skills:
+              - 'skills/**'
+            deployment:
+              - 'deployment/**'
+
   # ─── Unit tests ────────────────────────────────────────────────────────────
   test:
     name: Unit tests
     runs-on: self-hosted
+    needs: [changes]
+    if: needs.changes.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Clean root-owned caches from previous runs
         run: |
@@ -48,13 +83,16 @@ jobs:
               && poetry run ruff check . \
               && poetry run pytest -v --tb=short -p no:cacheprovider"
 
-  # ─── office-doctrine wheel build (every PR + push) ────────────────────────
+  # ─── office-doctrine wheel build ──────────────────────────────────────────
   # Builds the standalone lib + uploads the wheel as a CI artifact so it can
-  # be downloaded by the LibreCodeInterpreter image build (PR2). Runs in
-  # parallel with `test` for fast feedback.
+  # be downloaded by the LibreCodeInterpreter image build. Runs in parallel
+  # with `test` for fast feedback. Skipped when only docs/skills/deployment
+  # change, since the wheel doesn't depend on them.
   build-doctrine:
     name: Build office-doctrine wheel
     runs-on: self-hosted
+    needs: [changes]
+    if: needs.changes.outputs.doctrine == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Clean root-owned caches from previous runs
         run: |
@@ -89,29 +127,73 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ─── Image build verification (every PR + push) ───────────────────────────
+  # ─── Skill bundles validation ─────────────────────────────────────────────
+  # Sanity-check the three LibreChat skill bundles compile to importable
+  # zips. No upload — the artefacts are produced live during deploy by the
+  # consumer (LibreChat staging UI / programmatic import).
+  validate-skills:
+    name: Validate skill bundles
+    runs-on: self-hosted
+    needs: [changes]
+    if: needs.changes.outputs.skills == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build skill zips
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/skills:/skills \
+            -e RUNNER_UID=$(id -u) \
+            -e RUNNER_GID=$(id -g) \
+            -w /skills \
+            debian:bookworm-slim \
+            sh -c "apt-get update -qq && apt-get install -y -qq zip > /dev/null && ./build.sh && ls -lh dist/ && chown -R \$RUNNER_UID:\$RUNNER_GID dist/"
+
+  # ─── Image build verification ─────────────────────────────────────────────
   # Catches Dockerfile regressions before they hit main. No registry push —
-  # image stays local on the runner per PoC choice.
+  # image stays local on the runner per PoC choice. Triggers on any change
+  # that could affect the image (mcp code, doctrine lib bundled-in, or the
+  # Dockerfile / compose layer itself).
   build-image:
     name: Build image
     runs-on: self-hosted
-    needs: [test]
+    needs: [changes, test]
+    if: |
+      always()
+      && (needs.test.result == 'success' || needs.test.result == 'skipped')
+      && (needs.changes.outputs.mcp == 'true'
+          || needs.changes.outputs.doctrine == 'true'
+          || needs.changes.outputs.deployment == 'true'
+          || github.event_name == 'workflow_dispatch')
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -t office-mcp:ci-${{ github.sha }} .
+        run: docker build -f deployment/docker/mcp-server.Dockerfile -t office-mcp:ci-${{ github.sha }} .
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
   # PoC mode: everything is hardcoded except OPENROUTER_API_KEY.
   # Repo is private, so the bearer token / LibreChat secrets being in plain
   # text is acceptable. Rotate before any non-PoC use.
+  #
+  # Deploy is gated to changes that actually affect the running stack: the
+  # mcp server, the doctrine lib it bundles, or the deployment layer itself.
+  # A skills-only change re-runs validate-skills but does NOT redeploy
+  # (the skill zips are uploaded manually into LibreChat).
   deploy:
     name: Deploy
     runs-on: self-hosted
     environment: production
-    needs: [test, build-image]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [changes, test, build-image]
+    if: |
+      always()
+      && github.ref == 'refs/heads/main'
+      && github.event_name == 'push'
+      && (needs.test.result == 'success' || needs.test.result == 'skipped')
+      && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
+      && (needs.changes.outputs.mcp == 'true'
+          || needs.changes.outputs.doctrine == 'true'
+          || needs.changes.outputs.deployment == 'true')
     steps:
       - uses: actions/checkout@v4
 
@@ -203,7 +285,13 @@ jobs:
           docker rm  office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch code-interpreter-staging code-interpreter-redis code-interpreter-garage 2>/dev/null || true
 
       - name: Build and start full stack
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml up --build -d
+        run: |
+          docker compose \
+            -f deployment/compose/docker-compose.yml \
+            -f deployment/compose/docker-compose.librechat.yml \
+            -f deployment/compose/docker-compose.librechat-staging.yml \
+            -f deployment/compose/docker-compose.traefik.yml \
+            up --build -d
 
       - name: Wait for office-mcp health
         run: |
@@ -217,7 +305,12 @@ jobs:
             sleep 10
             if [ $i -eq 18 ]; then
               echo "office-mcp did not become healthy within 3 minutes"
-              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs office-mcp
+              docker compose \
+                -f deployment/compose/docker-compose.yml \
+                -f deployment/compose/docker-compose.librechat.yml \
+                -f deployment/compose/docker-compose.librechat-staging.yml \
+                -f deployment/compose/docker-compose.traefik.yml \
+                logs office-mcp
               exit 1
             fi
           done
@@ -234,7 +327,12 @@ jobs:
             sleep 10
           done
           echo "LibreChat did not become healthy within 5 minutes"
-          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs librechat
+          docker compose \
+            -f deployment/compose/docker-compose.yml \
+            -f deployment/compose/docker-compose.librechat.yml \
+            -f deployment/compose/docker-compose.librechat-staging.yml \
+            -f deployment/compose/docker-compose.traefik.yml \
+            logs librechat
           exit 1
 
       - name: Wait for LibreChat staging health
@@ -249,7 +347,12 @@ jobs:
             sleep 10
             if [ $i -eq 30 ]; then
               echo "LibreChat staging did not become healthy within 5 minutes"
-              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs librechat-staging
+              docker compose \
+                -f deployment/compose/docker-compose.yml \
+                -f deployment/compose/docker-compose.librechat.yml \
+                -f deployment/compose/docker-compose.librechat-staging.yml \
+                -f deployment/compose/docker-compose.traefik.yml \
+                logs librechat-staging
               exit 1
             fi
           done
@@ -270,7 +373,12 @@ jobs:
             sleep 10
           done
           echo "code-interpreter-staging never became healthy"
-          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml logs code-interpreter-staging
+          docker compose \
+            -f deployment/compose/docker-compose.yml \
+            -f deployment/compose/docker-compose.librechat.yml \
+            -f deployment/compose/docker-compose.librechat-staging.yml \
+            -f deployment/compose/docker-compose.traefik.yml \
+            logs code-interpreter-staging
           exit 1
 
       - name: Smoke tests
@@ -298,4 +406,10 @@ jobs:
 
       - name: Container status
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.librechat-staging.yml -f docker-compose.traefik.yml ps
+        run: |
+          docker compose \
+            -f deployment/compose/docker-compose.yml \
+            -f deployment/compose/docker-compose.librechat.yml \
+            -f deployment/compose/docker-compose.librechat-staging.yml \
+            -f deployment/compose/docker-compose.traefik.yml \
+            ps

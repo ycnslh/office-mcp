@@ -43,7 +43,7 @@ base image does not symlink `python`.
 
 Produces `dist/office-{docx,xlsx,pptx}.zip`, each ~10–20 KB. The `office-doctrine`
 wheel is **not** bundled — it lives in the code interpreter image (built by
-`docker/code-interpreter/Dockerfile`). Skills stay lean.
+`deployment/docker/code-interpreter/Dockerfile`). Skills stay lean.
 
 Archive layout matches what
 [packages/api/src/skills/import.ts](https://github.com/danny-avila/LibreChat/blob/main/packages/api/src/skills/import.ts)
@@ -52,7 +52,7 @@ accepts: `SKILL.md` at the root, ≤ 50 MB compressed, ≤ 500 entries.
 ## Import into LibreChat staging
 
 The PoC instance lives at `librechat-staging.reho.dev` (pinned to v0.8.6-rc1,
-see [docker-compose.librechat-staging.yml](../docker-compose.librechat-staging.yml)).
+see [docker-compose.librechat-staging.yml](../deployment/compose/docker-compose.librechat-staging.yml)).
 The code interpreter is already wired in via `LIBRECHAT_CODE_BASEURL`.
 
 UI path:

@@ -30,14 +30,14 @@ root** so stage 1 can read `packages/office-doctrine/`.
 ```bash
 # From the office-mcp repo root
 docker build \
-  -f docker/code-interpreter/Dockerfile \
+  -f deployment/docker/code-interpreter/Dockerfile \
   -t office-code-interpreter:test \
   .
 ```
 
 This is exactly what the staging compose does via
-`build: { context: ., dockerfile: docker/code-interpreter/Dockerfile }`
-in [`docker-compose.librechat-staging.yml`](../../docker-compose.librechat-staging.yml).
+`build: { context: ../.., dockerfile: deployment/docker/code-interpreter/Dockerfile }`
+in [`../compose/docker-compose.librechat-staging.yml`](../compose/docker-compose.librechat-staging.yml).
 
 ## Smoke test
 

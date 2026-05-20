@@ -1,18 +1,21 @@
 # ─────────────────────────────────────────────────────────────────────
 # Standalone office-mcp service — useful for dev and CI.
 # For end-to-end testing with LibreChat, use:
-#   docker compose -f docker-compose.yml -f docker-compose.librechat.yml up
+#   docker compose -f deployment/compose/docker-compose.yml \
+#                  -f deployment/compose/docker-compose.librechat.yml up
+# Build context is the repo root (../..) so the Dockerfile can COPY
+# both ``src/`` and ``packages/``.
 # ─────────────────────────────────────────────────────────────────────
 
 services:
   office-mcp:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: deployment/docker/mcp-server.Dockerfile
     image: office-mcp:dev
     container_name: office-mcp
     env_file:
-      - .env
+      - ../../.env
     ports:
       # Host port 18080 (8080 is often taken on dev/CI runners).
       # Inside the docker network LibreChat still reaches office-mcp on :8080.
