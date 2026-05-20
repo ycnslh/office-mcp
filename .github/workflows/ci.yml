@@ -143,9 +143,11 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/skills:/skills \
+            -e RUNNER_UID=$(id -u) \
+            -e RUNNER_GID=$(id -g) \
             -w /skills \
             debian:bookworm-slim \
-            sh -c "apt-get update -qq && apt-get install -y -qq zip > /dev/null && ./build.sh && ls -lh dist/"
+            sh -c "apt-get update -qq && apt-get install -y -qq zip > /dev/null && ./build.sh && ls -lh dist/ && chown -R \$RUNNER_UID:\$RUNNER_GID dist/"
 
   # ─── Image build verification ─────────────────────────────────────────────
   # Catches Dockerfile regressions before they hit main. No registry push —
