@@ -3,9 +3,9 @@
 # Traefik instance on the host (used by the pixel deployment).
 #
 # Append it to the compose command:
-#   docker compose -f deployment/compose/docker-compose.yml \
-#                  -f deployment/compose/docker-compose.librechat.yml \
-#                  -f deployment/compose/docker-compose.traefik.yml up --build -d
+#   docker compose -f docker-compose.yml \
+#                  -f docker-compose.librechat.yml \
+#                  -f docker-compose.traefik.yml up --build -d
 #
 # Requires:
 #   - a running Traefik watching the `proxy-network`
