@@ -286,7 +286,7 @@ jobs:
 
       - name: Build and start full stack
         run: |
-          docker compose \
+          docker compose --env-file .env \
             -f deployment/compose/docker-compose.yml \
             -f deployment/compose/docker-compose.librechat.yml \
             -f deployment/compose/docker-compose.librechat-staging.yml \
@@ -305,7 +305,7 @@ jobs:
             sleep 10
             if [ $i -eq 18 ]; then
               echo "office-mcp did not become healthy within 3 minutes"
-              docker compose \
+              docker compose --env-file .env \
                 -f deployment/compose/docker-compose.yml \
                 -f deployment/compose/docker-compose.librechat.yml \
                 -f deployment/compose/docker-compose.librechat-staging.yml \
@@ -327,7 +327,7 @@ jobs:
             sleep 10
           done
           echo "LibreChat did not become healthy within 5 minutes"
-          docker compose \
+          docker compose --env-file .env \
             -f deployment/compose/docker-compose.yml \
             -f deployment/compose/docker-compose.librechat.yml \
             -f deployment/compose/docker-compose.librechat-staging.yml \
@@ -347,7 +347,7 @@ jobs:
             sleep 10
             if [ $i -eq 30 ]; then
               echo "LibreChat staging did not become healthy within 5 minutes"
-              docker compose \
+              docker compose --env-file .env \
                 -f deployment/compose/docker-compose.yml \
                 -f deployment/compose/docker-compose.librechat.yml \
                 -f deployment/compose/docker-compose.librechat-staging.yml \
@@ -373,7 +373,7 @@ jobs:
             sleep 10
           done
           echo "code-interpreter-staging never became healthy"
-          docker compose \
+          docker compose --env-file .env \
             -f deployment/compose/docker-compose.yml \
             -f deployment/compose/docker-compose.librechat.yml \
             -f deployment/compose/docker-compose.librechat-staging.yml \
@@ -407,7 +407,7 @@ jobs:
       - name: Container status
         if: always()
         run: |
-          docker compose \
+          docker compose --env-file .env \
             -f deployment/compose/docker-compose.yml \
             -f deployment/compose/docker-compose.librechat.yml \
             -f deployment/compose/docker-compose.librechat-staging.yml \
