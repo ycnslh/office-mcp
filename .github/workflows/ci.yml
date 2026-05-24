@@ -62,9 +62,10 @@ jobs:
         run: docker build -t office-mcp:ci-${{ github.sha }} .
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
-  # PoC mode: everything is hardcoded except OPENROUTER_API_KEY.
-  # Repo is private, so the bearer token / LibreChat secrets being in plain
-  # text is acceptable. Rotate before any non-PoC use.
+  # Deploys office-mcp solo. LibreChat is no longer managed by this
+  # workflow — it lives in /home/marvin/librechat-stack/ on pixel,
+  # maintained hors-gitops. The two stacks share the `proxy-network`
+  # so LibreChat reaches office-mcp at http://office-mcp:8080/mcp.
   deploy:
     name: Deploy
     runs-on: self-hosted
@@ -94,47 +95,12 @@ jobs:
           AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
-
-          # LibreChat dev stack
-          LIBRECHAT_VERSION=v0.8.5
-          LIBRECHAT_PORT=3080
-          CREDS_KEY=c338d5f964ac62bd0cbc6348dc7c8774676b268f083ec020a1c0f6c263789d86
-          CREDS_IV=f4391d526676a5e11bca5fef26703a31
-          JWT_SECRET=52da6a0d900a72c69160eb5aea07ab281b8bafe1c70666df9d2ef98e47f2468a
-          JWT_REFRESH_SECRET=7f28eff69e733ba749187aae5be8cd579da45967dbb3ddd19d057eca36d66a6c
-
-          # LibreChat OIDC (Azure AD SSO) — reuses the office-mcp app registration.
-          # Local email/password registration is OFF: every user must enter via SSO.
-          ALLOW_REGISTRATION=false
-          ALLOW_SOCIAL_LOGIN=true
-          ALLOW_SOCIAL_REGISTRATION=true
-          OPENID_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}
-          OPENID_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}
-          OPENID_ISSUER=https://login.microsoftonline.com/${{ secrets.AZURE_TENANT_ID }}/v2.0
-          OPENID_SESSION_SECRET=ef14744065e1a4fc0b01a45c5fb3475876a3faac9ea83964e5021dffa6d36c71
-          # Persist the OIDC tokenset on the session so LibreChat can substitute
-          # {{LIBRECHAT_OPENID_ACCESS_TOKEN}} into MCP headers at request time.
-          # Without this flag the openid_strategy never stores the tokenset and
-          # the placeholder is forwarded literally — making MCP→Graph fail.
-          OPENID_REUSE_TOKENS=true
-          # Sign-in scopes include Files.ReadWrite so Azure issues an access
-          # token with aud=Graph + Files.ReadWrite directly — the token is
-          # usable as-is against /me/drive/*. This sidesteps the On-Behalf-Of
-          # flow: OBO would require the source token to have aud=<app reg>,
-          # which only happens if we expose a custom API scope on the app reg.
-          # offline_access enables silent refresh by LibreChat without re-prompt.
-          OPENID_SCOPE=openid profile email offline_access Files.ReadWrite
-          OPENID_CALLBACK_URL=/oauth/openid/callback
-          OPENID_BUTTON_LABEL=Continuer avec Microsoft
-
-          # OpenRouter LLM — only real secret, injected from GitHub
-          OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
           EOF
 
       - name: Validate required secrets are present
         run: |
           missing=0
-          for var in OPENROUTER_API_KEY AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+          for var in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
             val=$(grep "^${var}=" .env | cut -d= -f2-)
             if [ -z "$val" ]; then
               echo "Missing required GitHub secret: ${var}"
@@ -144,13 +110,13 @@ jobs:
           [ $missing -eq 0 ] || exit 1
           echo ".env validated"
 
-      - name: Stop existing containers
+      - name: Stop existing office-mcp container
         run: |
-          docker stop office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
-          docker rm  office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+          docker stop office-mcp 2>/dev/null || true
+          docker rm  office-mcp 2>/dev/null || true
 
-      - name: Build and start full stack
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml up --build -d
+      - name: Build and start office-mcp
+        run: docker compose -f docker-compose.yml -f docker-compose.traefik.yml up --build -d
 
       - name: Wait for office-mcp health
         run: |
@@ -164,41 +130,17 @@ jobs:
             sleep 10
             if [ $i -eq 18 ]; then
               echo "office-mcp did not become healthy within 3 minutes"
-              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs office-mcp
+              docker compose -f docker-compose.yml -f docker-compose.traefik.yml logs office-mcp
               exit 1
             fi
           done
 
-      - name: Wait for LibreChat health
+      - name: Smoke test
         run: |
-          echo "Waiting for LibreChat on port 3080..."
-          for i in $(seq 1 30); do
-            if curl -sf "http://localhost:3080/api/config" > /dev/null; then
-              echo "LibreChat healthy (attempt $i)"
-              exit 0
-            fi
-            echo "  attempt $i/30, retrying in 10s..."
-            sleep 10
-          done
-          echo "LibreChat did not become healthy within 5 minutes"
-          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs librechat
-          exit 1
-
-      - name: Smoke tests
-        run: |
-          FAILED=0
-
           curl -sf "http://localhost:18080/health" | grep -q '"status":"ok"' \
             && echo "PASS  office-mcp /health" \
-            || { echo "FAIL  office-mcp /health"; FAILED=1; }
-
-          curl -sf "http://localhost:3080/api/config" | grep -q '"appTitle"' \
-            && echo "PASS  LibreChat /api/config" \
-            || { echo "FAIL  LibreChat /api/config"; FAILED=1; }
-
-          [ $FAILED -eq 0 ] || exit 1
-          echo "All smoke tests passed"
+            || { echo "FAIL  office-mcp /health"; exit 1; }
 
       - name: Container status
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml ps
+        run: docker compose -f docker-compose.yml -f docker-compose.traefik.yml ps
