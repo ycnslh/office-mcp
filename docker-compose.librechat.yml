@@ -2,12 +2,11 @@
 # Dev stack — LibreChat v0.8.4 + dependencies + office-mcp.
 # Use it to test the full integration locally:
 #   1. cp .env.example .env  &&  fill CREDS_KEY / CREDS_IV / JWT_*
-#   2. docker compose -f deployment/compose/docker-compose.yml \
-#                     -f deployment/compose/docker-compose.librechat.yml up
+#   2. docker compose -f docker-compose.yml -f docker-compose.librechat.yml up
 #   3. Open http://localhost:3080
 #
-# In production, copy deployment/librechat.yaml.example into your real
-# LibreChat project and reuse the equivalent override compose snippet.
+# In production, copy librechat.yaml.example into your real LibreChat
+# project and reuse `docker-compose.librechat.override.yml.example` instead.
 # ─────────────────────────────────────────────────────────────────────
 
 services:
@@ -71,7 +70,7 @@ services:
       - OPENID_CALLBACK_URL=${OPENID_CALLBACK_URL:-/oauth/openid/callback}
       - OPENID_BUTTON_LABEL=${OPENID_BUTTON_LABEL:-Continuer avec Microsoft}
     volumes:
-      - ../librechat.yaml.example:/app/librechat.yaml:ro
+      - ./librechat.yaml.example:/app/librechat.yaml:ro
       - librechat-images:/app/client/public/images
       - librechat-uploads:/app/uploads
     networks:
