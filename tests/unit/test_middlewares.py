@@ -56,11 +56,11 @@ async def test_user_context_extracted_from_headers() -> None:
         app,
         "/whoami",
         headers={
-            "X-LibreChat-User-Id": "yacine",
-            "X-LibreChat-User-Email": "yacine@netwatch.fr",
+            "X-LibreChat-User-Id": "alice",
+            "X-LibreChat-User-Email": "alice@example.com",
         },
     )
-    assert response.json() == {"user_id": "yacine", "email": "yacine@netwatch.fr"}
+    assert response.json() == {"user_id": "alice", "email": "alice@example.com"}
 
 
 @pytest.mark.asyncio
@@ -364,7 +364,7 @@ async def test_bearer_short_circuits_before_inner_middlewares() -> None:
     app.add_middleware(BearerAuthMiddleware, expected_token="s3cr3t")  # outermost
 
     response = await _get(
-        app, "/whoami", headers={"X-LibreChat-User-Id": "yacine"}
+        app, "/whoami", headers={"X-LibreChat-User-Id": "alice"}
     )
     assert response.status_code == 401
     assert seen["inner_ran"] is False

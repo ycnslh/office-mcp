@@ -90,10 +90,10 @@ def test_download_serves_file_with_valid_token(
     running_server: tuple[str, Settings],
 ) -> None:
     base_url, settings = running_server
-    _seed_file(settings, user_id="yacine", uri="local://x.txt", data=b"hello world")
+    _seed_file(settings, user_id="alice", uri="local://x.txt", data=b"hello world")
 
-    with bind_user(UserContext(user_id="yacine")):
-        download_url = build_download_url("local://x.txt", "yacine")
+    with bind_user(UserContext(user_id="alice")):
+        download_url = build_download_url("local://x.txt", "alice")
 
     assert download_url is not None
     response = httpx.get(download_url, timeout=5)

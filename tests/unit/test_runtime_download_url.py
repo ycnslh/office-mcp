@@ -72,8 +72,8 @@ def _meta(uri: str, *, web_url: str | None = None) -> FileMetadata:
 
 def _user() -> UserContext:
     return UserContext(
-        user_id="yacine",
-        email="yacine@netwatch.fr",
+        user_id="alice",
+        email="alice@example.com",
         on_behalf_of_token="user-AT",
     )
 
