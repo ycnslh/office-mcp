@@ -1,7 +1,7 @@
 # office-mcp — Plan d'implémentation pour Claude Code
 
 > MCP server pour créer et modifier des documents Word, Excel, PowerPoint.
-> Cible d'intégration : **LibreChat 0.8.4** (container Docker cohabitant).
+> Transport : **streamable-http** sur `/mcp` (compatible n'importe quel client MCP).
 > Stockage abstrait : **Local / SharePoint-OneDrive (Graph) / S3-Blob**.
 
 ---
@@ -358,81 +358,19 @@ def get_backend(uri: str) -> StorageBackend:
 
 ---
 
-## 7. Intégration LibreChat — fichiers à fournir
+## 7. Intégration côté client MCP
 
-### `librechat.yaml.example`
+office-mcp parle **streamable-http** sur `/mcp`. Tout client MCP (LibreChat, Claude Desktop, etc.) peut s'y brancher. La configuration côté client (yaml LibreChat, json MCP, etc.) **ne vit plus dans ce repo** — elle est maintenue séparément par chaque utilisateur du serveur.
 
-```yaml
-version: 1.2.0
+Pour l'instance pixel de Yacine, la config LibreChat vit hors-gitops sous `/home/marvin/librechat-stack/` (voir `.claude/agents/pixel-deployer.md` pour le détail).
 
-mcpSettings:
-  allowedDomains:
-    - "office-mcp"  # resolved via docker network
+Le seul contrat exposé par office-mcp :
 
-mcpServers:
-  office:
-    type: streamable-http
-    url: http://office-mcp:8080/mcp
-    timeout: 120000
-    headers:
-      Authorization: "Bearer ${OFFICE_MCP_TOKEN}"
-      X-LibreChat-User-Id: "{{LIBRECHAT_USER_ID}}"
-      X-LibreChat-User-Email: "{{LIBRECHAT_USER_EMAIL}}"
-    serverInstructions: |
-      Cet MCP expose des outils pour créer et éditer des documents Office (.docx, .xlsx, .pptx).
-      Avant toute création :
-      1. Consulte la resource office://rules/<format> pour les conventions de mise en forme.
-      2. Utilise un template quand c'est possible (office://templates/list).
-      3. Les fichiers sont référencés par URI abstraite (local://, sp://, od://, s3://, az://).
-      4. Retourne toujours le file_uri au user pour qu'il puisse le retrouver.
-    title: "Office Documents"
-    description: "Créer et modifier Word, Excel, PowerPoint"
-```
-
-### `docker-compose.librechat.override.yml.example`
-
-```yaml
-services:
-  office-mcp:
-    image: office-mcp:latest  # ou build: ./office-mcp
-    container_name: office-mcp
-    environment:
-      - OFFICE_MCP_TOKEN=${OFFICE_MCP_TOKEN}
-      - OFFICE_MCP_LOG_LEVEL=INFO
-      - OFFICE_MCP_LOCAL_ROOT=/data
-      - OFFICE_MCP_MAX_FILE_SIZE_MB=50
-      # Graph (optionnel)
-      - GRAPH_TENANT_ID=${GRAPH_TENANT_ID:-}
-      - GRAPH_CLIENT_ID=${GRAPH_CLIENT_ID:-}
-      - GRAPH_CLIENT_SECRET=${GRAPH_CLIENT_SECRET:-}
-      # S3 (optionnel)
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
-      - AWS_REGION=${AWS_REGION:-eu-west-3}
-    volumes:
-      - office_mcp_data:/data
-    networks:
-      - librechat_default
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-  api:  # service LibreChat existant
-    volumes:
-      - ./librechat.yaml:/app/librechat.yaml
-    depends_on:
-      - office-mcp
-
-volumes:
-  office_mcp_data:
-
-networks:
-  librechat_default:
-    external: true
-```
+| Header HTTP | Rôle |
+|---|---|
+| `Authorization: Bearer <token>` | auth server-level entre le client MCP et office-mcp (partagé via `OFFICE_MCP_TOKEN`) |
+| `X-User-Authorization: Bearer <graph-token>` | token Graph délégué de l'utilisateur final, aud=Graph + scope Files.ReadWrite, utilisé tel quel par office-mcp pour appeler `/me/drive/*` |
+| `X-User-Id`, `X-User-Email` | identité du user pour le scoping multi-tenant et l'audit log |
 
 ---
 
@@ -579,7 +517,7 @@ pour validation.
 
 - **Montrer l'extensibilité** : créer un 4ᵉ backend storage en live (ex: Google Drive) pour prouver que l'abstraction tient la route. C'est ~50 lignes de code.
 - **Montrer les resources MCP** : demander à l'LLM de lire `office://rules/xlsx` avant de générer un modèle financier, le résultat est visiblement meilleur.
-- **Multi-user** : ouvrir deux sessions LibreChat avec deux users différents, montrer qu'ils ne voient pas les fichiers de l'autre.
+- **Multi-user** : deux sessions client avec deux users différents, montrer qu'ils ne voient pas les fichiers de l'autre.
 - **Audit log** : montrer les logs JSON structurés avec le user_id, c'est un gros plus en contexte entreprise.
 
 ### Questions probables du client
@@ -597,8 +535,8 @@ pour validation.
 1. **Ne pas porter trop fidèlement le workflow unpack/edit/pack** du skill Anthropic. En Python avec `python-docx` on accède directement à l'objet. L'unpack/pack est utile seulement pour les cas XML complexes (tracked changes profondes).
 2. **Ne pas exposer trop d'outils**. 24 c'est déjà beaucoup. Si l'LLM s'emmêle, regrouper.
 3. **Ne pas mettre LibreOffice dans le Dockerfile trop tôt** — tester d'abord sans (les formules ne seront pas recalculées mais ça marche pour le reste). Image ~800 MB avec vs ~200 MB sans.
-4. **Ne pas oublier `mcpSettings.allowedDomains`** — sans ça LibreChat bloque en SSRF et le message d'erreur n'est pas évident.
-5. **Headers LibreChat** : bien vérifier que `{{LIBRECHAT_USER_ID}}` est transmis. Test simple : logger le header reçu et l'afficher dans les logs MCP au premier appel.
+4. **Côté client MCP : whitelister le domaine** — beaucoup de clients (dont LibreChat) bloquent par défaut en SSRF les URLs internes. Si tu pointes sur `http://office-mcp:8080`, ajoute-le à la liste autorisée du client.
+5. **Headers user** : bien vérifier que le client substitue `{{user_id}}` ou équivalent avant l'envoi. Test simple : logger le header reçu et l'afficher dans les logs MCP au premier appel.
 
 ---
 
@@ -606,16 +544,14 @@ pour validation.
 
 Pour la démo au client, Yacine aura :
 
-- ✅ Repo Git `office-mcp` public ou interne avec 11 phases commitées proprement.
+- ✅ Repo Git `office-mcp` public avec les phases commitées proprement.
 - ✅ Image Docker `office-mcp:latest` prête à déployer.
-- ✅ `librechat.yaml.example` + `docker-compose.override.yml.example` documentés.
 - ✅ 3 scénarios de démo reproductibles (rapport / budget / deck).
 - ✅ Doc d'architecture (`docs/architecture.md`) avec schéma.
-- ✅ Doc d'intégration (`docs/librechat-integration.md`) step-by-step.
 - ✅ Tests verts (~80% couverture).
 - ✅ CI/CD GitHub Actions.
 
-Et surtout, un **article Dernière Goutte** "Building a production-grade Office MCP for LibreChat" à publier une fois le projet validé — parfait pour positionner Yacine sur le pivot IA.
+Et surtout, un **article Dernière Goutte** "Building a production-grade Office MCP" à publier une fois le projet validé — parfait pour positionner Yacine sur le pivot IA.
 
 ---
 
