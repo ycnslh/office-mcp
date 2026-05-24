@@ -12,52 +12,16 @@ env:
 
 permissions:
   contents: read
-  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ─── Change detection ─────────────────────────────────────────────────────
-  # Path-filtered routing so PRs that only touch one slice of the monorepo
-  # don't trigger every job. Outputs feed every downstream `if:` guard.
-  # workflow_dispatch bypasses the filter (everything runs).
-  changes:
-    name: Detect changes
-    runs-on: self-hosted
-    outputs:
-      mcp: ${{ steps.filter.outputs.mcp }}
-      doctrine: ${{ steps.filter.outputs.doctrine }}
-      skills: ${{ steps.filter.outputs.skills }}
-      deployment: ${{ steps.filter.outputs.deployment }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            mcp:
-              - 'src/office_mcp/**'
-              - 'tests/**'
-              - 'pyproject.toml'
-              - 'poetry.lock'
-              - 'deployment/docker/mcp-server.Dockerfile'
-            doctrine:
-              - 'packages/office-doctrine/**'
-            skills:
-              - 'skills/**'
-            deployment:
-              - 'deployment/**'
-              - '.github/workflows/**'
-
   # ─── Unit tests ────────────────────────────────────────────────────────────
   test:
     name: Unit tests
     runs-on: self-hosted
-    needs: [changes]
-    if: needs.changes.outputs.mcp == 'true' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Clean root-owned caches from previous runs
         run: |
@@ -84,117 +48,29 @@ jobs:
               && poetry run ruff check . \
               && poetry run pytest -v --tb=short -p no:cacheprovider"
 
-  # ─── office-doctrine wheel build ──────────────────────────────────────────
-  # Builds the standalone lib + uploads the wheel as a CI artifact so it can
-  # be downloaded by the LibreCodeInterpreter image build. Runs in parallel
-  # with `test` for fast feedback. Skipped when only docs/skills/deployment
-  # change, since the wheel doesn't depend on them.
-  build-doctrine:
-    name: Build office-doctrine wheel
-    runs-on: self-hosted
-    needs: [changes]
-    if: needs.changes.outputs.doctrine == 'true' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Clean root-owned caches from previous runs
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}:/workspace \
-            python:3.12-slim \
-            sh -c "find /workspace -type d \( -name __pycache__ -o -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache -o -name .venv -o -name dist \) -exec rm -rf {} + 2>/dev/null; exit 0"
-
-      - uses: actions/checkout@v4
-
-      - name: Build wheel
-        run: |
-          docker run --rm \
-            --user $(id -u):$(id -g) \
-            --env HOME=/tmp \
-            --env POETRY_VIRTUALENVS_IN_PROJECT=true \
-            --env POETRY_NO_INTERACTION=1 \
-            -v ${{ github.workspace }}:/app \
-            -w /app/packages/office-doctrine \
-            python:3.12-slim \
-            sh -c "export PATH=/tmp/.local/bin:\$PATH \
-              && pip install --quiet --user poetry==1.8.4 \
-              && poetry install --with dev --no-ansi \
-              && poetry run pytest -v --tb=short -p no:cacheprovider \
-              && poetry build --no-ansi"
-
-      - name: Upload wheel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: office-doctrine-wheel
-          path: packages/office-doctrine/dist/*.whl
-          if-no-files-found: error
-          retention-days: 30
-
-  # ─── Skill bundles validation ─────────────────────────────────────────────
-  # Sanity-check the three LibreChat skill bundles compile to importable
-  # zips. No upload — the artefacts are produced live during deploy by the
-  # consumer (LibreChat staging UI / programmatic import).
-  validate-skills:
-    name: Validate skill bundles
-    runs-on: self-hosted
-    needs: [changes]
-    if: needs.changes.outputs.skills == 'true' || github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build skill zips
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/skills:/skills \
-            -e RUNNER_UID=$(id -u) \
-            -e RUNNER_GID=$(id -g) \
-            -w /skills \
-            debian:bookworm-slim \
-            sh -c "apt-get update -qq && apt-get install -y -qq zip > /dev/null && ./build.sh && ls -lh dist/ && chown -R \$RUNNER_UID:\$RUNNER_GID dist/"
-
-  # ─── Image build verification ─────────────────────────────────────────────
+  # ─── Image build verification (every PR + push) ───────────────────────────
   # Catches Dockerfile regressions before they hit main. No registry push —
-  # image stays local on the runner per PoC choice. Triggers on any change
-  # that could affect the image (mcp code, doctrine lib bundled-in, or the
-  # Dockerfile / compose layer itself).
+  # image stays local on the runner per PoC choice.
   build-image:
     name: Build image
     runs-on: self-hosted
-    needs: [changes, test]
-    if: |
-      always()
-      && (needs.test.result == 'success' || needs.test.result == 'skipped')
-      && (needs.changes.outputs.mcp == 'true'
-          || needs.changes.outputs.doctrine == 'true'
-          || needs.changes.outputs.deployment == 'true'
-          || github.event_name == 'workflow_dispatch')
+    needs: [test]
     steps:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -f deployment/docker/mcp-server.Dockerfile -t office-mcp:ci-${{ github.sha }} .
+        run: docker build -t office-mcp:ci-${{ github.sha }} .
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
   # PoC mode: everything is hardcoded except OPENROUTER_API_KEY.
   # Repo is private, so the bearer token / LibreChat secrets being in plain
   # text is acceptable. Rotate before any non-PoC use.
-  #
-  # Deploy is gated to changes that actually affect the running stack: the
-  # mcp server, the doctrine lib it bundles, or the deployment layer itself.
-  # A skills-only change re-runs validate-skills but does NOT redeploy
-  # (the skill zips are uploaded manually into LibreChat).
   deploy:
     name: Deploy
     runs-on: self-hosted
     environment: production
-    needs: [changes, test, build-image]
-    if: |
-      always()
-      && github.ref == 'refs/heads/main'
-      && github.event_name == 'push'
-      && (needs.test.result == 'success' || needs.test.result == 'skipped')
-      && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped')
-      && (needs.changes.outputs.mcp == 'true'
-          || needs.changes.outputs.doctrine == 'true'
-          || needs.changes.outputs.deployment == 'true')
+    needs: [test, build-image]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -222,9 +98,6 @@ jobs:
           # LibreChat dev stack
           LIBRECHAT_VERSION=v0.8.5
           LIBRECHAT_PORT=3080
-          # Staging instance (PoC: validate v0.8.6-rc1 Rich File Artifact Previews)
-          LIBRECHAT_STAGING_VERSION=v0.8.6-rc1
-          LIBRECHAT_STAGING_PORT=3081
           CREDS_KEY=c338d5f964ac62bd0cbc6348dc7c8774676b268f083ec020a1c0f6c263789d86
           CREDS_IV=f4391d526676a5e11bca5fef26703a31
           JWT_SECRET=52da6a0d900a72c69160eb5aea07ab281b8bafe1c70666df9d2ef98e47f2468a
@@ -256,15 +129,6 @@ jobs:
 
           # OpenRouter LLM — only real secret, injected from GitHub
           OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
-
-          # Self-hosted Code Interpreter (staging only — PR2).
-          # Hardcoded per the PoC mode comment at line ~107 of this workflow:
-          # repo is private, no real user data, key rotates the day the PoC ends.
-          CODE_INTERPRETER_KEY=fc0a5b6e8d7c4a2f9e1b3d6a8c0e2f4a6b8d0c2e4f6a8b0d2c4e6f8a0b2c4d6e
-          # Garage S3 (object storage backing the code interpreter sandbox).
-          # Internal to the office-mcp Docker network; defaults from upstream.
-          CODE_INTERPRETER_S3_ACCESS_KEY=GKminioadmin0000
-          CODE_INTERPRETER_S3_SECRET_KEY=minioadminsecret
           EOF
 
       - name: Validate required secrets are present
@@ -282,17 +146,11 @@ jobs:
 
       - name: Stop existing containers
         run: |
-          docker stop office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch code-interpreter-staging code-interpreter-redis code-interpreter-garage 2>/dev/null || true
-          docker rm  office-mcp librechat librechat-staging office-mcp-mongodb office-mcp-meilisearch code-interpreter-staging code-interpreter-redis code-interpreter-garage 2>/dev/null || true
+          docker stop office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
+          docker rm  office-mcp librechat office-mcp-mongodb office-mcp-meilisearch 2>/dev/null || true
 
       - name: Build and start full stack
-        run: |
-          docker compose --env-file .env \
-            -f deployment/compose/docker-compose.yml \
-            -f deployment/compose/docker-compose.librechat.yml \
-            -f deployment/compose/docker-compose.librechat-staging.yml \
-            -f deployment/compose/docker-compose.traefik.yml \
-            up --build -d
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml up --build -d
 
       - name: Wait for office-mcp health
         run: |
@@ -306,12 +164,7 @@ jobs:
             sleep 10
             if [ $i -eq 18 ]; then
               echo "office-mcp did not become healthy within 3 minutes"
-              docker compose --env-file .env \
-                -f deployment/compose/docker-compose.yml \
-                -f deployment/compose/docker-compose.librechat.yml \
-                -f deployment/compose/docker-compose.librechat-staging.yml \
-                -f deployment/compose/docker-compose.traefik.yml \
-                logs office-mcp
+              docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs office-mcp
               exit 1
             fi
           done
@@ -328,58 +181,7 @@ jobs:
             sleep 10
           done
           echo "LibreChat did not become healthy within 5 minutes"
-          docker compose --env-file .env \
-            -f deployment/compose/docker-compose.yml \
-            -f deployment/compose/docker-compose.librechat.yml \
-            -f deployment/compose/docker-compose.librechat-staging.yml \
-            -f deployment/compose/docker-compose.traefik.yml \
-            logs librechat
-          exit 1
-
-      - name: Wait for LibreChat staging health
-        run: |
-          echo "Waiting for LibreChat staging on port 3081..."
-          for i in $(seq 1 30); do
-            if curl -sf "http://localhost:3081/api/config" > /dev/null; then
-              echo "LibreChat staging healthy (attempt $i)"
-              break
-            fi
-            echo "  attempt $i/30, retrying in 10s..."
-            sleep 10
-            if [ $i -eq 30 ]; then
-              echo "LibreChat staging did not become healthy within 5 minutes"
-              docker compose --env-file .env \
-                -f deployment/compose/docker-compose.yml \
-                -f deployment/compose/docker-compose.librechat.yml \
-                -f deployment/compose/docker-compose.librechat-staging.yml \
-                -f deployment/compose/docker-compose.traefik.yml \
-                logs librechat-staging
-              exit 1
-            fi
-          done
-
-      - name: Wait for code-interpreter staging health
-        # No host port — probe through `docker exec` into the container and
-        # validate office_doctrine is importable + producing real bytes.
-        # 30 × 10s = 5 min. First boot does a `docker compose build` of the
-        # custom image, which is the slowest path here.
-        run: |
-          echo "Waiting for code-interpreter-staging via internal exec..."
-          for i in $(seq 1 30); do
-            if docker exec code-interpreter-staging python3 -c "from office_doctrine import docx; out = docx.compose(title='T', blocks=[]); assert len(out) > 1000" 2>/dev/null; then
-              echo "code-interpreter-staging healthy + office_doctrine OK (attempt $i)"
-              exit 0
-            fi
-            echo "  attempt $i/30, retrying in 10s..."
-            sleep 10
-          done
-          echo "code-interpreter-staging never became healthy"
-          docker compose --env-file .env \
-            -f deployment/compose/docker-compose.yml \
-            -f deployment/compose/docker-compose.librechat.yml \
-            -f deployment/compose/docker-compose.librechat-staging.yml \
-            -f deployment/compose/docker-compose.traefik.yml \
-            logs code-interpreter-staging
+          docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml logs librechat
           exit 1
 
       - name: Smoke tests
@@ -394,23 +196,9 @@ jobs:
             && echo "PASS  LibreChat /api/config" \
             || { echo "FAIL  LibreChat /api/config"; FAILED=1; }
 
-          curl -sf "http://localhost:3081/api/config" | grep -q '"appTitle"' \
-            && echo "PASS  LibreChat staging /api/config" \
-            || { echo "FAIL  LibreChat staging /api/config"; FAILED=1; }
-
-          docker exec code-interpreter-staging libreoffice --version > /dev/null 2>&1 \
-            && echo "PASS  code-interpreter libreoffice --version" \
-            || { echo "FAIL  code-interpreter libreoffice --version"; FAILED=1; }
-
           [ $FAILED -eq 0 ] || exit 1
           echo "All smoke tests passed"
 
       - name: Container status
         if: always()
-        run: |
-          docker compose --env-file .env \
-            -f deployment/compose/docker-compose.yml \
-            -f deployment/compose/docker-compose.librechat.yml \
-            -f deployment/compose/docker-compose.librechat-staging.yml \
-            -f deployment/compose/docker-compose.traefik.yml \
-            ps
+        run: docker compose -f docker-compose.yml -f docker-compose.librechat.yml -f docker-compose.traefik.yml ps
