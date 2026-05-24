@@ -1,11 +1,12 @@
 # office-mcp
 
 MCP server that creates and edits Word, Excel, and PowerPoint
-documents on the user's Microsoft OneDrive. Speaks the
-**streamable-http** transport — compatible with any MCP client (e.g.
-LibreChat, Claude Desktop). The storage layer is pluggable
-(StorageBackend ABC); additional backends (SharePoint, S3, Azure Blob,
-local volume) can be enabled when needed.
+documents. Speaks the **streamable-http** transport — compatible with
+any MCP client (e.g. LibreChat, Claude Desktop). Two storage backends
+are wired in: `local://` (volume on disk) and `od://` (the user's
+OneDrive via Microsoft Graph delegated OAuth). The storage layer is a
+pluggable ABC, so SharePoint / S3 / Azure Blob backends can be added
+without touching the tools.
 
 > See [CLAUDE.md](./CLAUDE.md) for the full plan and rationale.
 
@@ -60,19 +61,27 @@ Generic MCP client config (e.g. `mcp.json`, `claude_desktop_config.json`):
       "type": "streamable-http",
       "url": "http://localhost:18080/mcp",
       "headers": {
+        // Server-level auth between client and office-mcp.
         "Authorization": "Bearer <OFFICE_MCP_TOKEN>",
-        "X-User-Authorization": "Bearer <microsoft-graph-access-token>"
+        // User-level: the end user's Graph access token, used as-is
+        // to call /me/drive/*. Must carry aud=Graph + Files.ReadWrite.
+        // For LibreChat: "Bearer {{LIBRECHAT_OPENID_ACCESS_TOKEN}}"
+        // (requires OPENID_REUSE_TOKENS=true and Files.ReadWrite in
+        // OPENID_SCOPE so Azure issues the token with the right aud).
+        "X-User-Authorization": "Bearer <microsoft-graph-access-token>",
+        // Multi-user scoping + audit log. Without these, every request
+        // collapses to a single default user.
+        "X-LibreChat-User-Id": "<stable-user-id>",
+        "X-LibreChat-User-Email": "<user-email>"
       }
     }
   }
 }
 ```
 
-The user-level bearer must carry `aud=Graph` and the `Files.ReadWrite`
-scope — that's how office-mcp acts on the user's OneDrive without an
-On-Behalf-Of exchange. Clients that do SSO with Azure AD (e.g.
-LibreChat with `OPENID_REUSE_TOKENS=true`) can substitute the token at
-request time.
+The `X-LibreChat-*` prefix is historical — those names predate the
+move to a generic MCP transport and the server still reads them
+verbatim. Any client can set them, not just LibreChat.
 
 ## Repo layout
 
@@ -82,7 +91,7 @@ src/office_mcp/
   runtime.py           Shared FastMCP + registry + settings singletons
   config.py            pydantic-settings
   context.py           per-request UserContext (extracted from headers)
-  storage/             StorageBackend ABC + LocalBackend (+ Graph/S3/AzBlob in V2)
+  storage/             StorageBackend ABC + LocalBackend (local://) + GraphBackend (od://)
   engines/             python-docx, openpyxl, python-pptx wrappers
   tools/               docx / xlsx / pptx / fs MCP tools
   resources/           office://rules/{docx,xlsx,pptx} + content/*.md
