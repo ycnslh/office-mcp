@@ -53,7 +53,7 @@ def _app(capacity: int) -> Starlette:
     )
 
 
-async def _get(app: Starlette, path: str, user_id: str | None = "yacine") -> httpx.Response:
+async def _get(app: Starlette, path: str, user_id: str | None = "alice") -> httpx.Response:
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         if user_id:

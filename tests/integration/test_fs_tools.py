@@ -90,20 +90,20 @@ def registry(tmp_path: Path) -> Iterator[StorageRegistry]:
 
 
 @pytest.fixture
-def yacine() -> Iterator[UserContext]:
-    ctx = UserContext(user_id="yacine", email="yacine@netwatch.fr")
+def alice() -> Iterator[UserContext]:
+    ctx = UserContext(user_id="alice", email="alice@example.com")
     with bind_user(ctx):
         yield ctx
 
 
 @pytest.mark.asyncio
 async def test_fs_list_enumerates_user_tree(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     # seed two files directly through the backend for speed
     local = registry.get("local://")
-    await local.write("local://a.txt", b"one", user_ctx=yacine)
-    await local.write("local://nested/b.txt", b"two-two", user_ctx=yacine)
+    await local.write("local://a.txt", b"one", user_ctx=alice)
+    await local.write("local://nested/b.txt", b"two-two", user_ctx=alice)
 
     result = await fs_list("local://")
     uris = sorted(f["uri"] for f in result["files"])
@@ -114,10 +114,10 @@ async def test_fs_list_enumerates_user_tree(
 
 @pytest.mark.asyncio
 async def test_fs_stat_returns_metadata(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     local = registry.get("local://")
-    await local.write("local://x.txt", b"hello", user_ctx=yacine)
+    await local.write("local://x.txt", b"hello", user_ctx=alice)
 
     meta = await fs_stat("local://x.txt")
     assert meta["file_uri"] == "local://x.txt"
@@ -127,7 +127,7 @@ async def test_fs_stat_returns_metadata(
 
 @pytest.mark.asyncio
 async def test_fs_stat_missing_raises(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     with pytest.raises(StorageNotFoundError):
         await fs_stat("local://ghost.txt")
@@ -135,39 +135,39 @@ async def test_fs_stat_missing_raises(
 
 @pytest.mark.asyncio
 async def test_fs_copy_within_local_backend(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     local = registry.get("local://")
-    await local.write("local://src.txt", b"payload", user_ctx=yacine)
+    await local.write("local://src.txt", b"payload", user_ctx=alice)
 
     result = await fs_copy("local://src.txt", "local://dst.txt")
     assert result["file_uri"] == "local://dst.txt"
     assert result["source_uri"] == "local://src.txt"
     assert result["size_bytes"] == 7
 
-    copied = await local.read("local://dst.txt", user_ctx=yacine)
+    copied = await local.read("local://dst.txt", user_ctx=alice)
     assert copied == b"payload"
 
 
 @pytest.mark.asyncio
 async def test_fs_copy_across_backends(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     local = registry.get("local://")
     memory = registry.get("memory://")
-    await local.write("local://source.bin", b"cross-backend", user_ctx=yacine)
+    await local.write("local://source.bin", b"cross-backend", user_ctx=alice)
 
     result = await fs_copy("local://source.bin", "memory://dest.bin")
     assert result["file_uri"] == "memory://dest.bin"
-    assert (await memory.read("memory://dest.bin", user_ctx=yacine)) == b"cross-backend"
+    assert (await memory.read("memory://dest.bin", user_ctx=alice)) == b"cross-backend"
 
 
 @pytest.mark.asyncio
 async def test_fs_delete_removes_file(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     local = registry.get("local://")
-    await local.write("local://tmp.txt", b"bye", user_ctx=yacine)
+    await local.write("local://tmp.txt", b"bye", user_ctx=alice)
 
     await fs_delete("local://tmp.txt")
     with pytest.raises(StorageNotFoundError):
@@ -176,7 +176,7 @@ async def test_fs_delete_removes_file(
 
 @pytest.mark.asyncio
 async def test_fs_copy_unknown_source_scheme_rejected(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     from office_mcp.utils.errors import UnknownSchemeError
 

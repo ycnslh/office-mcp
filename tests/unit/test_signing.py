@@ -11,11 +11,11 @@ from office_mcp.utils import signing
 
 def test_sign_then_verify_roundtrip() -> None:
     token = signing.sign(
-        user_id="yacine", uri="local://reports/q3.docx", secret="k3y"
+        user_id="alice", uri="local://reports/q3.docx", secret="k3y"
     )
     claims = signing.verify(token, secret="k3y")
 
-    assert claims.user_id == "yacine"
+    assert claims.user_id == "alice"
     assert claims.uri == "local://reports/q3.docx"
     assert claims.expires_at > int(time.time())
     # Old shape: no state field — claims should reflect that.
@@ -26,7 +26,7 @@ def test_sign_then_verify_carries_state_when_supplied() -> None:
     """The download route uses ``state`` to look up the user's OAuth
     token at request time — pin the round-trip so ``od://`` URLs work."""
     token = signing.sign(
-        user_id="yacine",
+        user_id="alice",
         uri="od://Decks/pitch.pptx",
         secret="k3y",
         state="opaque-state-abc",
@@ -90,7 +90,7 @@ def test_verify_rejects_when_signing_disabled() -> None:
 
 def test_tokens_are_url_safe() -> None:
     token = signing.sign(
-        user_id="yacine@netwatch.fr",
+        user_id="alice@example.com",
         uri="local://reports/with spaces & weird/file.docx",
         secret="k",
     )

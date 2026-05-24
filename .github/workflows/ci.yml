@@ -62,16 +62,15 @@ jobs:
         run: docker build -t office-mcp:ci-${{ github.sha }} .
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
-  # Deploys office-mcp solo. LibreChat is no longer managed by this
-  # workflow — it lives in ~yacine/librechat-stack/ on pixel,
-  # maintained hors-gitops. The two stacks share the `proxy-network`
-  # so LibreChat reaches office-mcp at http://office-mcp:8080/mcp.
+  # Specific to the upstream maintainer's self-hosted runner. Forks
+  # don't have access to the `production` environment / secrets, so
+  # this job is gated on the repo owner — it no-ops everywhere else.
   deploy:
     name: Deploy
     runs-on: self-hosted
     environment: production
     needs: [test, build-image]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'soulkill3r/office-mcp'
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +89,7 @@ jobs:
           OFFICE_MCP_DOWNLOAD_BASE_URL=https://office-mcp.reho.dev
           OFFICE_MCP_DOWNLOAD_URL_TTL_SECONDS=900
           OFFICE_MCP_PUBLIC_BASE_URL=https://office-mcp.reho.dev
+          OFFICE_MCP_PUBLIC_HOST=office-mcp.reho.dev
 
           # Azure AD / Microsoft Graph (delegated OAuth → user OneDrive)
           AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}

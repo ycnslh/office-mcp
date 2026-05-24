@@ -387,9 +387,9 @@ def test_callback_links_session_when_started_by_a_tool(
         "refresh_token": "RT",
         "expires_in": 3600,
         "id_token_claims": {
-            "oid": "oid-yacine",
-            "preferred_username": "yacine@netwatch.fr",
-            "email": "yacine@netwatch.fr",
+            "oid": "oid-alice",
+            "preferred_username": "alice@example.com",
+            "email": "alice@example.com",
         },
     }
 
@@ -411,4 +411,4 @@ def test_callback_links_session_when_started_by_a_tool(
     entry = get_token_store().get_token_for_session("session-S1")
     assert entry is not None
     assert entry.access_token == "delegated-AT"
-    assert entry.user_upn == "yacine@netwatch.fr"
+    assert entry.user_upn == "alice@example.com"

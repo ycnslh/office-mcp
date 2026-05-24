@@ -32,15 +32,15 @@ def registry(tmp_path: Path) -> Iterator[StorageRegistry]:
 
 
 @pytest.fixture
-def yacine() -> Iterator[UserContext]:
-    ctx = UserContext(user_id="yacine", email="yacine@netwatch.fr")
+def alice() -> Iterator[UserContext]:
+    ctx = UserContext(user_id="alice", email="alice@example.com")
     with bind_user(ctx):
         yield ctx
 
 
 @pytest.mark.asyncio
 async def test_xlsx_create_writes_to_storage_backend(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     result = await xlsx_create(
         "local://budget/2026.xlsx",
@@ -50,12 +50,12 @@ async def test_xlsx_create_writes_to_storage_backend(
 
     assert result["file_uri"] == "local://budget/2026.xlsx"
     assert result["sheets"] == ["Inputs", "Calc"]
-    assert (tmp_path / yacine.user_id / "budget" / "2026.xlsx").exists()
+    assert (tmp_path / alice.user_id / "budget" / "2026.xlsx").exists()
 
 
 @pytest.mark.asyncio
 async def test_xlsx_create_full_workbook_with_writes_and_formulas(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     result = await xlsx_create(
         "local://full.xlsx",
@@ -95,7 +95,7 @@ async def test_xlsx_create_full_workbook_with_writes_and_formulas(
 
 @pytest.mark.asyncio
 async def test_xlsx_update_appends_to_existing_workbook(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await xlsx_create("local://m.xlsx", sheets=[{"name": "S"}], recalc=False)
     result = await xlsx_update(
@@ -127,7 +127,7 @@ async def test_xlsx_update_appends_to_existing_workbook(
 
 @pytest.mark.asyncio
 async def test_xlsx_update_creates_missing_sheet(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await xlsx_create(
         "local://m2.xlsx", sheets=[{"name": "Original"}], recalc=False
@@ -152,7 +152,7 @@ async def test_xlsx_update_creates_missing_sheet(
 @pytest.mark.asyncio
 @_NEEDS_SOFFICE
 async def test_xlsx_create_with_recalc_returns_computed_values(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await xlsx_create(
         "local://r.xlsx",

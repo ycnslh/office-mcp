@@ -28,15 +28,15 @@ def registry(tmp_path: Path) -> Iterator[StorageRegistry]:
 
 
 @pytest.fixture
-def yacine() -> Iterator[UserContext]:
-    ctx = UserContext(user_id="yacine", email="yacine@netwatch.fr")
+def alice() -> Iterator[UserContext]:
+    ctx = UserContext(user_id="alice", email="alice@example.com")
     with bind_user(ctx):
         yield ctx
 
 
 @pytest.mark.asyncio
 async def test_pptx_create_writes_to_storage_backend(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     result = await pptx_create(
         "local://decks/pitch.pptx",
@@ -49,12 +49,12 @@ async def test_pptx_create_writes_to_storage_backend(
     assert result["file_uri"] == "local://decks/pitch.pptx"
     assert result["theme"] == "cyberpunk"
     assert result["slide_count"] == 1
-    assert (tmp_path / yacine.user_id / "decks" / "pitch.pptx").exists()
+    assert (tmp_path / alice.user_id / "decks" / "pitch.pptx").exists()
 
 
 @pytest.mark.asyncio
 async def test_pptx_create_full_deck_one_call(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     """One deck assembled in a single call covering all slide flavours."""
     await pptx_create(
@@ -88,7 +88,7 @@ async def test_pptx_create_full_deck_one_call(
 
 @pytest.mark.asyncio
 async def test_pptx_append_extends_existing_deck(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await pptx_create(
         "local://d.pptx", slides=[{"type": "title", "title": "Deck"}]
@@ -114,7 +114,7 @@ async def test_pptx_append_extends_existing_deck(
 
 @pytest.mark.asyncio
 async def test_pptx_replace_patches_existing_slides(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await pptx_create(
         "local://d.pptx",
@@ -142,7 +142,7 @@ async def test_pptx_replace_patches_existing_slides(
 
 @pytest.mark.asyncio
 async def test_pptx_concurrent_replaces_are_serialised_per_file(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     """Several pptx_replace calls fired in parallel against the same
     file used to lose updates because each read started from the same

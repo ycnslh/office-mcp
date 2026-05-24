@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────
 # Optional override — exposes office-mcp via an existing Traefik
-# instance on the host (used by the pixel deployment).
+# instance on the host.
 #
 # Append it to the compose command:
 #   docker compose -f docker-compose.yml \
@@ -8,8 +8,11 @@
 #
 # Requires:
 #   - a running Traefik watching the `proxy-network`
-#   - a `letsencrypt` certResolver configured on Traefik
-#   - DNS for `office-mcp.reho.dev` pointing to the host
+#   - a `letsencrypt` certResolver configured on Traefik (or change
+#     the certresolver label below)
+#   - DNS for the host listed in OFFICE_MCP_PUBLIC_HOST pointing to
+#     the Docker host; set the var in your .env, e.g.
+#       OFFICE_MCP_PUBLIC_HOST=office-mcp.example.com
 # ─────────────────────────────────────────────────────────────────────
 
 services:
@@ -20,7 +23,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy-network"
-      - "traefik.http.routers.office-mcp.rule=Host(`office-mcp.reho.dev`)"
+      - "traefik.http.routers.office-mcp.rule=Host(`${OFFICE_MCP_PUBLIC_HOST:-office-mcp.example.com}`)"
       - "traefik.http.routers.office-mcp.entrypoints=websecure"
       - "traefik.http.routers.office-mcp.tls.certresolver=letsencrypt"
       - "traefik.http.services.office-mcp.loadbalancer.server.port=8080"

@@ -40,15 +40,15 @@ def registry(tmp_path: Path) -> Iterator[StorageRegistry]:
 
 
 @pytest.fixture
-def yacine() -> Iterator[UserContext]:
-    ctx = UserContext(user_id="yacine", email="yacine@netwatch.fr")
+def alice() -> Iterator[UserContext]:
+    ctx = UserContext(user_id="alice", email="alice@example.com")
     with bind_user(ctx):
         yield ctx
 
 
 @pytest.mark.asyncio
 async def test_docx_create_writes_to_storage_backend(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     result = await docx_create(
         "local://reports/q3.docx", blocks=[], title="Q3 report"
@@ -58,12 +58,12 @@ async def test_docx_create_writes_to_storage_backend(
     assert result["size_bytes"] > 0
     assert result["etag"] is not None
     assert "Q3 report" in result["summary"]
-    assert (tmp_path / yacine.user_id / "reports" / "q3.docx").exists()
+    assert (tmp_path / alice.user_id / "reports" / "q3.docx").exists()
 
 
 @pytest.mark.asyncio
 async def test_docx_create_with_blocks_produces_full_document(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     result = await docx_create(
         "local://full.docx",
@@ -92,7 +92,7 @@ async def test_docx_create_with_blocks_produces_full_document(
 
 @pytest.mark.asyncio
 async def test_docx_create_then_read_roundtrip(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await docx_create("local://simple.docx", blocks=[], title="Hello world")
     payload = await docx_read("local://simple.docx")
@@ -104,7 +104,7 @@ async def test_docx_create_then_read_roundtrip(
 
 @pytest.mark.asyncio
 async def test_docx_append_persists_multiple_blocks(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await docx_create("local://doc.docx", blocks=[], title="Doc")
 
@@ -133,7 +133,7 @@ async def test_docx_append_persists_multiple_blocks(
 
 @pytest.mark.asyncio
 async def test_docx_replace_substitutes_and_returns_count(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await docx_create(
         "local://template.docx",
@@ -161,7 +161,7 @@ async def test_docx_replace_substitutes_and_returns_count(
 
 @pytest.mark.asyncio
 async def test_docx_remove_drops_targeted_section(
-    registry: StorageRegistry, yacine: UserContext
+    registry: StorageRegistry, alice: UserContext
 ) -> None:
     await docx_create(
         "local://multi.docx",
@@ -208,7 +208,7 @@ def test_swap_extension(uri: str, expected: str) -> None:
 @pytest.mark.asyncio
 @_NEEDS_SOFFICE
 async def test_docx_to_pdf_writes_valid_pdf(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     await docx_create(
         "local://reports/q3.docx",
@@ -223,7 +223,7 @@ async def test_docx_to_pdf_writes_valid_pdf(
 
     assert result["file_uri"] == "local://reports/q3.pdf"
     assert result["source_uri"] == "local://reports/q3.docx"
-    pdf_path = tmp_path / yacine.user_id / "reports" / "q3.pdf"
+    pdf_path = tmp_path / alice.user_id / "reports" / "q3.pdf"
     assert pdf_path.exists()
     assert pdf_path.read_bytes().startswith(b"%PDF-")
 
@@ -231,7 +231,7 @@ async def test_docx_to_pdf_writes_valid_pdf(
 @pytest.mark.asyncio
 @_NEEDS_SOFFICE
 async def test_docx_to_pdf_custom_output_uri(
-    registry: StorageRegistry, tmp_path: Path, yacine: UserContext
+    registry: StorageRegistry, tmp_path: Path, alice: UserContext
 ) -> None:
     await docx_create("local://in.docx", blocks=[], title="Hello")
 
@@ -240,4 +240,4 @@ async def test_docx_to_pdf_custom_output_uri(
     )
 
     assert result["file_uri"] == "local://out/renamed.pdf"
-    assert (tmp_path / yacine.user_id / "out" / "renamed.pdf").exists()
+    assert (tmp_path / alice.user_id / "out" / "renamed.pdf").exists()
