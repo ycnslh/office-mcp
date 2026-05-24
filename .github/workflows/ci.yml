@@ -63,7 +63,7 @@ jobs:
 
   # ─── Deploy (main branch only, after tests pass) ──────────────────────────
   # Deploys office-mcp solo. LibreChat is no longer managed by this
-  # workflow — it lives in /home/marvin/librechat-stack/ on pixel,
+  # workflow — it lives in ~yacine/librechat-stack/ on pixel,
   # maintained hors-gitops. The two stacks share the `proxy-network`
   # so LibreChat reaches office-mcp at http://office-mcp:8080/mcp.
   deploy:
