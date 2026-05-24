@@ -362,7 +362,7 @@ def get_backend(uri: str) -> StorageBackend:
 
 office-mcp parle **streamable-http** sur `/mcp`. Tout client MCP (LibreChat, Claude Desktop, etc.) peut s'y brancher. La configuration côté client (yaml LibreChat, json MCP, etc.) **ne vit plus dans ce repo** — elle est maintenue séparément par chaque utilisateur du serveur.
 
-Pour l'instance pixel de Yacine, la config LibreChat vit hors-gitops sous `/home/marvin/librechat-stack/` (voir `.claude/agents/pixel-deployer.md` pour le détail).
+Pour l'instance pixel de Yacine, la config LibreChat vit hors-gitops sous `~yacine/librechat-stack/` (voir `.claude/agents/pixel-deployer.md` pour le détail).
 
 Le seul contrat exposé par office-mcp :
 

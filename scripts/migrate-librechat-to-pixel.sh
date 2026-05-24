@@ -3,7 +3,7 @@
 # migrate-librechat-to-pixel.sh
 #
 # One-shot helper to install the LibreChat stack at
-#   /home/marvin/librechat-stack/
+#   $HOME/librechat-stack/
 # on the pixel host, in a way that survives an office-mcp redeploy.
 #
 # Why this script exists:
@@ -17,46 +17,77 @@
 #   deploys, (3) keep reaching office-mcp via the shared
 #   `proxy-network`.
 #
-# Run as the `yacine` user via:
+# Run as the operator user (e.g. yacine) via:
 #   scp scripts/migrate-librechat-to-pixel.sh pixel:/tmp/
-#   ssh pixel "sudo -u marvin bash /tmp/migrate-librechat-to-pixel.sh"
+#   ssh pixel "bash /tmp/migrate-librechat-to-pixel.sh"
+#
+# Stack lands in $HOME/librechat-stack so the operator owns it (no
+# sudo needed for upkeep). The CI workspace
+# /home/marvin/actions-runner-omcp/_work/office-mcp/office-mcp/.env
+# is only READ for secret extraction (world-readable).
 #
 # Idempotent: re-running it just refreshes the compose/yaml/.env and
 # `docker compose up -d` again. Existing volumes are reused.
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-STACK_DIR="/home/marvin/librechat-stack"
+STACK_DIR="$HOME/librechat-stack"
 CI_ENV="/home/marvin/actions-runner-omcp/_work/office-mcp/office-mcp/.env"
 
 echo "==> Preparing $STACK_DIR"
 mkdir -p "$STACK_DIR"
 cd "$STACK_DIR"
 
-# ── Extract the LibreChat-relevant values from the last CI-generated .env ──
+# ── Source the secrets ───────────────────────────────────────────────
+# OFFICE_MCP_TOKEN + AZURE_* come from the CI-generated .env (the
+# office-mcp workflow continues to write them on every deploy).
+#
+# LibreChat-only secrets (CREDS_*, JWT_*, OPENID_SESSION_SECRET,
+# OPENROUTER_API_KEY) live in the *currently running* `librechat`
+# container's environment — they were baked in by the previous
+# full-stack deploy and aren't in the post-split CI .env anymore.
+# Reading them back from the container preserves the existing JWT
+# signing key (no forced logout) and avoids re-generating an OPENID
+# session secret that would invalidate active SSO cookies.
+
 if [ ! -r "$CI_ENV" ]; then
   echo "ERROR: cannot read $CI_ENV — has the office-mcp CI ever run on this host?"
   exit 1
 fi
 
-get() { grep -E "^${1}=" "$CI_ENV" | head -1 | cut -d= -f2-; }
+if ! docker inspect librechat >/dev/null 2>&1; then
+  echo "ERROR: no running librechat container to read the legacy secrets from."
+  echo "       Either run this script while the orphan stack is still up, or"
+  echo "       seed the env values manually."
+  exit 1
+fi
 
-OFFICE_MCP_TOKEN=$(get OFFICE_MCP_TOKEN)
-CREDS_KEY=$(get CREDS_KEY)
-CREDS_IV=$(get CREDS_IV)
-JWT_SECRET=$(get JWT_SECRET)
-JWT_REFRESH_SECRET=$(get JWT_REFRESH_SECRET)
-OPENID_SESSION_SECRET=$(get OPENID_SESSION_SECRET)
-OPENROUTER_API_KEY=$(get OPENROUTER_API_KEY)
-AZURE_CLIENT_ID=$(get AZURE_CLIENT_ID)
-AZURE_CLIENT_SECRET=$(get AZURE_CLIENT_SECRET)
-AZURE_TENANT_ID=$(get AZURE_TENANT_ID)
+get_ci() { grep -E "^${1}=" "$CI_ENV" | head -1 | cut -d= -f2-; }
+get_lc() { docker inspect librechat --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E "^${1}=" | head -1 | cut -d= -f2-; }
 
-for var in OFFICE_MCP_TOKEN CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET \
-           OPENID_SESSION_SECRET OPENROUTER_API_KEY \
-           AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID; do
+OFFICE_MCP_TOKEN=$(get_ci OFFICE_MCP_TOKEN)
+AZURE_CLIENT_ID=$(get_ci AZURE_CLIENT_ID)
+AZURE_CLIENT_SECRET=$(get_ci AZURE_CLIENT_SECRET)
+AZURE_TENANT_ID=$(get_ci AZURE_TENANT_ID)
+
+CREDS_KEY=$(get_lc CREDS_KEY)
+CREDS_IV=$(get_lc CREDS_IV)
+JWT_SECRET=$(get_lc JWT_SECRET)
+JWT_REFRESH_SECRET=$(get_lc JWT_REFRESH_SECRET)
+OPENID_SESSION_SECRET=$(get_lc OPENID_SESSION_SECRET)
+OPENROUTER_API_KEY=$(get_lc OPENROUTER_API_KEY)
+
+for var in OFFICE_MCP_TOKEN AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TENANT_ID; do
   if [ -z "${!var}" ]; then
     echo "ERROR: $var missing from $CI_ENV — refusing to write incomplete config"
+    exit 1
+  fi
+done
+
+for var in CREDS_KEY CREDS_IV JWT_SECRET JWT_REFRESH_SECRET \
+           OPENID_SESSION_SECRET OPENROUTER_API_KEY; do
+  if [ -z "${!var}" ]; then
+    echo "ERROR: $var not found in the running librechat container env"
     exit 1
   fi
 done
