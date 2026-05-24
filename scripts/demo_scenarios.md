@@ -90,8 +90,7 @@ created → clickable download in the conversation).
 > Génère un deck dans `od://AI Generated/roadmap-2026.pptx` avec le thème
 > `cyberpunk`. Consulte `office://rules/pptx`. Structure :
 >
-> - Slide de titre : "Roadmap 2026 — office-mcp", sous-titre "Netwatch
->   — équipe IA".
+> - Slide de titre : "Roadmap 2026 — office-mcp", sous-titre "Équipe IA".
 > - Section "Déjà livré" — layout section.
 > - Slide "Ce qui est en prod" — layout content — bullets : stockage
 >   local scope par user, 16 outils MCP, 3 doctrines de mise en forme,

@@ -1,28 +1,18 @@
-# office-mcp — Plan d'implémentation pour Claude Code
+# office-mcp — Architecture & conventions
 
 > MCP server pour créer et modifier des documents Word, Excel, PowerPoint.
 > Transport : **streamable-http** sur `/mcp` (compatible n'importe quel client MCP).
-> Stockage abstrait : **Local / SharePoint-OneDrive (Graph) / S3-Blob**.
+> Stockage abstrait : **Local / OneDrive (Graph)** en V1 ; SharePoint / S3 / Azure Blob via la même ABC quand un consommateur en demande.
 
 ---
 
-## 0. Contexte et objectifs
+## 0. Objectifs du projet
 
-Le client a challengé Yacine sur la réalisation d'un MCP server capable de créer/modifier des documents Office dans le cadre d'un pivot vers l'équipe IA. Le livrable doit :
-
-- S'intégrer proprement à LibreChat 0.8.4 (transport **streamable-http**, recommandé en production par la doc LibreChat).
-- Tourner en container Docker à côté de LibreChat, sur le même réseau interne.
-- Abstraire le stockage des fichiers (local volume, SharePoint/OneDrive via Microsoft Graph, S3/Azure Blob).
-- Exposer des outils métier clairs, pas une simple API CRUD.
-- Embarquer une vraie "doctrine" de production (les règles Anthropic pour docx/xlsx/pptx — marges, polices, styles de tables, color coding finance pour xlsx, etc.) — exposées comme **MCP resources** pour que l'LLM les consulte à la demande.
-
-### Critères de réussite (démo client)
-
-1. Depuis LibreChat, un utilisateur demande "crée-moi un rapport Q3 avec un sommaire, un tableau de ventes et une conclusion" → un `.docx` propre est généré et accessible.
-2. Même chose pour un .xlsx avec formules qui se calculent, et un .pptx avec slides cohérentes.
-3. L'outil `office_read` permet de lire un document existant (Graph ou local) puis `*_edit` le modifie avec tracked-changes visibles.
-4. Multi-user isolation : chaque utilisateur LibreChat voit uniquement ses fichiers (scoping par `LIBRECHAT_USER_ID`).
-5. Zéro secret en clair dans le repo.
+- Exposer des **outils métier** clairs (`docx_create`, `xlsx_update`, etc.), pas une API CRUD de bas niveau.
+- Abstraire le stockage : un même tool fonctionne sur un volume local, un OneDrive utilisateur, demain SharePoint ou S3.
+- Embarquer une **doctrine de formatting** (police, marges, styles de table, color coding finance, palettes de thème) appliquée automatiquement par les engines + exposée via les ressources `office://rules/*` pour que le LLM les consulte à la demande.
+- Multi-user isolation : chaque utilisateur final voit uniquement ses fichiers (scoping par `X-LibreChat-User-Id` côté contexte, et `od://me/...` côté Graph).
+- Zéro secret en clair dans le repo.
 
 ---
 
@@ -30,14 +20,13 @@ Le client a challengé Yacine sur la réalisation d'un MCP server capable de cr�
 
 | Couche | Choix | Justification |
 |---|---|---|
-| Langage | Python 3.12 | Écosystème Office mature, cohérent avec ENGRAM |
-| Framework MCP | **FastMCP 2.x** | Support natif streamable-http, déjà utilisé sur ENGRAM |
-| Dep manager | **Poetry** | Cohérent avec le reste de la stack Yacine |
+| Langage | Python 3.12 | Écosystème Office Python mature |
+| Framework MCP | **FastMCP 2.x** | Support natif streamable-http, peu de boilerplate |
+| Dep manager | **Poetry** | Lock-file reproductible, scripts entry points |
 | Office libs | `python-docx`, `openpyxl`, `python-pptx` | Standards, lecture/écriture sans dépendance Office |
 | Rendu/validation | `libreoffice --headless` | Recalcul formules xlsx, conversion PDF pour preview |
-| Graph API | `msgraph-sdk` + `msal` | SDK officiel, OAuth on-behalf-of |
-| S3/Blob | `boto3` / `azure-storage-blob` | Standards |
-| Observabilité | `structlog` + OpenTelemetry | Même pattern que ENGRAM/PYTHIA |
+| Graph API | `msgraph-sdk` + `msal` | SDK officiel, OAuth délégué |
+| Observabilité | `structlog` + OpenTelemetry | Logs JSON structurés, traces opt-in |
 | Tests | `pytest` + `pytest-asyncio` | |
 | Container | Python 3.12-slim + LibreOffice headless | Image ~800MB, acceptable |
 
@@ -360,25 +349,23 @@ def get_backend(uri: str) -> StorageBackend:
 
 ## 7. Intégration côté client MCP
 
-office-mcp parle **streamable-http** sur `/mcp`. Tout client MCP (LibreChat, Claude Desktop, etc.) peut s'y brancher. La configuration côté client (yaml LibreChat, json MCP, etc.) **ne vit plus dans ce repo** — elle est maintenue séparément par chaque utilisateur du serveur.
+office-mcp parle **streamable-http** sur `/mcp`. Tout client MCP (LibreChat, Claude Desktop, etc.) peut s'y brancher. La configuration côté client (yaml LibreChat, json MCP, etc.) est de la responsabilité du consommateur, pas du serveur — ce repo n'embarque aucun example client.
 
-Pour l'instance pixel de Yacine, la config LibreChat vit hors-gitops sous `~yacine/librechat-stack/` (voir `.claude/agents/pixel-deployer.md` pour le détail).
-
-Le seul contrat exposé par office-mcp :
+Le contrat exposé par office-mcp :
 
 | Header HTTP | Rôle |
 |---|---|
 | `Authorization: Bearer <token>` | auth server-level entre le client MCP et office-mcp (partagé via `OFFICE_MCP_TOKEN`) |
 | `X-User-Authorization: Bearer <graph-token>` | token Graph délégué de l'utilisateur final, aud=Graph + scope Files.ReadWrite, utilisé tel quel par office-mcp pour appeler `/me/drive/*` |
-| `X-User-Id`, `X-User-Email` | identité du user pour le scoping multi-tenant et l'audit log |
+| `X-LibreChat-User-Id`, `X-LibreChat-User-Email` | identité du user pour le scoping multi-tenant et l'audit log (le préfixe `X-LibreChat-*` est historique mais n'importe quel client peut les fournir) |
 
 ---
 
-## 8. Phases de delivery (pour Claude Code)
+## 8. Phases de delivery (historique)
 
-Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, et une note de démo.
+Comment le projet a été construit. Chaque phase est un commit / tag dans l'historique git.
 
-### Phase 0 — Bootstrap (30 min)
+### Phase 0 — Bootstrap
 
 - `poetry init`, dépendances : `mcp[cli]`, `fastmcp`, `python-docx`, `openpyxl`, `python-pptx`, `pydantic-settings`, `structlog`, `anyio`.
 - Dependencies dev : `pytest`, `pytest-asyncio`, `ruff`, `mypy`.
@@ -387,7 +374,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - `.env.example`, `.gitignore`, `.dockerignore`, `README.md` (intro + quickstart).
 - Commit : `chore: bootstrap project with poetry and docker`.
 
-### Phase 1 — Storage abstraction + LocalBackend (1h)
+### Phase 1 — Storage abstraction + LocalBackend
 
 - `StorageBackend` ABC, `FileMetadata`, `UserContext`.
 - `LocalBackend` complet avec scoping `/data/{user_id}/` et protection path traversal.
@@ -395,7 +382,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - Tests unitaires `test_storage_local.py` (read/write/stat/list/delete + path traversal rejection + user scoping).
 - Commit : `feat(storage): add StorageBackend ABC with LocalBackend implementation`.
 
-### Phase 2 — FastMCP server + context extraction (45 min)
+### Phase 2 — FastMCP server + context extraction
 
 - `server.py` : app FastMCP, transport streamable-http, endpoint `/health`.
 - Middleware d'extraction `UserContext` depuis headers HTTP (`X-LibreChat-User-Id`, etc.).
@@ -404,7 +391,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - Test e2e basique : un client MCP Python se connecte, liste les tools (vide pour l'instant).
 - Commit : `feat(server): FastMCP streamable-http server with user context middleware`.
 
-### Phase 3 — Docx engine + 4 tools de base (2h)
+### Phase 3 — Docx engine + 4 tools de base
 
 - `docx_engine.py` : wrapper `python-docx` avec application automatique des règles (police Arial, marges 1", heading styles, tables en DXA double width, etc.).
 - Tools : `docx_create` (avec `blocks` batché), `docx_read`, `docx_append`, `docx_replace`, `docx_remove`.
@@ -412,7 +399,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - Tests : create → read → assert contenu, insert table → assert double widths présentes.
 - Commit : `feat(docx): add docx engine and 4 core tools with formatting rules`.
 
-### Phase 4 — Xlsx engine + 4 tools (2h)
+### Phase 4 — Xlsx engine + 4 tools
 
 - `xlsx_engine.py` : wrapper `openpyxl`, invocation LibreOffice pour recalc des formules, color coding finance auto-applicable.
 - Tools : `xlsx_create` (avec `sheets=[{name, writes, formulas}]` batché), `xlsx_read_range`, `xlsx_update`.
@@ -420,7 +407,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - Tests : create avec sheets, write range, apply formula avec recalc vérifié.
 - Commit : `feat(xlsx): add xlsx engine with 4 tools and formula recalc`.
 
-### Phase 5 — Pptx engine + 3 tools (1h30)
+### Phase 5 — Pptx engine + 3 tools
 
 - `pptx_engine.py` : wrapper `python-pptx` avec thèmes (cyberpunk, corporate, minimal).
 - Templates `.pptx` dans `src/office_mcp/templates/pptx/`.
@@ -429,7 +416,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - Tests.
 - Commit : `feat(pptx): add pptx engine with 3 tools and themes`.
 
-### Phase 6 — Filesystem tools + docx_to_pdf (45 min)
+### Phase 6 — Filesystem tools + docx_to_pdf
 
 - Tools : `fs_list`, `fs_stat`, `fs_copy`, `fs_delete`, `docx_to_pdf`.
 - Tests (copy local → local, copy cross-backend mocké).
@@ -443,13 +430,13 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - Tests d'intégration avec mock Graph (via `pytest-httpx`).
 - Commit : `feat(storage): add Graph backend for SharePoint and OneDrive`.
 
-### Phase 8 — S3 + Azure Blob backends (1h)
+### Phase 8 — S3 + Azure Blob backends
 
 - `s3.py` et `azure_blob.py` (implémentations similaires, simples).
 - Tests avec `moto` (S3) et mocks Azure.
 - Commit : `feat(storage): add S3 and Azure Blob backends`.
 
-### Phase 9 — Intégration LibreChat + démo scripts (1h30)
+### Phase 9 — Intégration LibreChat + démo scripts
 
 - `librechat.yaml.example` finalisé.
 - `docker-compose.librechat.override.yml.example` finalisé.
@@ -457,7 +444,7 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - README enrichi avec section "Intégration LibreChat" step-by-step.
 - Commit : `docs: add LibreChat integration guide and demo scenarios`.
 
-### Phase 10 — Hardening (1h)
+### Phase 10 — Hardening
 
 - Rate limiting par user (in-memory token bucket).
 - Logging structuré JSON + correlation IDs.
@@ -465,94 +452,18 @@ Chaque phase finit sur un commit propre avec Conventional Commits, tests verts, 
 - `/metrics` endpoint Prometheus optionnel.
 - Commit : `feat(ops): add rate limiting, structured logging and metrics`.
 
-### Phase 11 — CI/CD (30 min)
+### Phase 11 — CI/CD
 
 - `.github/workflows/ci.yml` : lint (ruff), type check (mypy), tests, build Docker.
 - Image publiée sur ghcr.io ou registry privé.
 - Commit : `ci: add GitHub Actions for lint, tests and Docker build`.
 
-**Estimation totale : ~14 heures de dev pour un POC solide, 2 jours pleins.**
-
 ---
 
-## 9. Prompts à donner à Claude Code
+## 9. Pièges connus
 
-### Prompt initial de bootstrap
-
-```
-Tu vas implémenter office-mcp, un serveur MCP (Model Context Protocol) en Python
-qui permet de créer et modifier des documents Word, Excel et PowerPoint, intégrable
-à LibreChat 0.8.4 via le transport streamable-http.
-
-Lis d'abord le fichier PLAN_OFFICE_MCP.md à la racine du projet. Il contient le plan
-complet, l'architecture, les contrats d'interface, la structure du repo, et les phases
-de delivery.
-
-Commence par la Phase 0 (Bootstrap). Crée le squelette du repo, configure Poetry,
-le Dockerfile et le docker-compose.yml minimal. Fais un premier commit en
-Conventional Commits. Ne commence PAS la Phase 1 tant que la Phase 0 n'est pas validée.
-
-Règles de travail :
-- Conventional Commits (feat:, fix:, chore:, docs:, test:, ci:).
-- Un commit par phase, tests verts avant commit.
-- Ruff + mypy en strict mode.
-- Type hints complets sur tout le code.
-- docstrings Google style sur les fonctions publiques.
-- Pas de secret en dur, tout via pydantic-settings + .env.
-- Tests pytest async (pytest-asyncio) en mode strict.
-
-Une fois la Phase 0 terminée, arrête-toi et montre-moi le `tree` du repo
-pour validation.
-```
-
-### Prompts de passage de phase
-
-> "Phase N terminée et validée. Passe à la Phase N+1 en suivant PLAN_OFFICE_MCP.md §8. Rappel des règles : tests verts + Conventional Commits + stop à la fin pour revue."
-
----
-
-## 10. Points d'attention pour Yacine
-
-### Pendant la démo client
-
-- **Montrer l'extensibilité** : créer un 4ᵉ backend storage en live (ex: Google Drive) pour prouver que l'abstraction tient la route. C'est ~50 lignes de code.
-- **Montrer les resources MCP** : demander à l'LLM de lire `office://rules/xlsx` avant de générer un modèle financier, le résultat est visiblement meilleur.
-- **Multi-user** : deux sessions client avec deux users différents, montrer qu'ils ne voient pas les fichiers de l'autre.
-- **Audit log** : montrer les logs JSON structurés avec le user_id, c'est un gros plus en contexte entreprise.
-
-### Questions probables du client
-
-| Question | Réponse |
-|---|---|
-| Pourquoi FastMCP et pas SDK officiel MCP ? | Streamable-http natif, moins de boilerplate, communauté active. Le SDK officiel marche aussi, c'est interchangeable. |
-| Pourquoi pas Office.js / Graph natif ? | Parce qu'on veut un MCP réutilisable hors Microsoft 365 aussi. L'abstraction storage permet de switcher. |
-| Gestion des conflits simultanés ? | ETag / `if_match` sur write, 412 Precondition Failed renvoyé à l'LLM qui peut re-read et re-apply. |
-| Comment on teste ? | Pyramide complète : unit sur engines, intégration sur tools, e2e avec client MCP réel. Voir `/tests`. |
-| Quid de la sécurité SharePoint ? | V1 = app permissions (service principal scoped). V2 = on-behalf-of (chaque user utilise son propre token). |
-
-### Pièges à éviter
-
-1. **Ne pas porter trop fidèlement le workflow unpack/edit/pack** du skill Anthropic. En Python avec `python-docx` on accède directement à l'objet. L'unpack/pack est utile seulement pour les cas XML complexes (tracked changes profondes).
-2. **Ne pas exposer trop d'outils**. 24 c'est déjà beaucoup. Si l'LLM s'emmêle, regrouper.
-3. **Ne pas mettre LibreOffice dans le Dockerfile trop tôt** — tester d'abord sans (les formules ne seront pas recalculées mais ça marche pour le reste). Image ~800 MB avec vs ~200 MB sans.
-4. **Côté client MCP : whitelister le domaine** — beaucoup de clients (dont LibreChat) bloquent par défaut en SSRF les URLs internes. Si tu pointes sur `http://office-mcp:8080`, ajoute-le à la liste autorisée du client.
-5. **Headers user** : bien vérifier que le client substitue `{{user_id}}` ou équivalent avant l'envoi. Test simple : logger le header reçu et l'afficher dans les logs MCP au premier appel.
-
----
-
-## 11. Livrables finaux du POC
-
-Pour la démo au client, Yacine aura :
-
-- ✅ Repo Git `office-mcp` public avec les phases commitées proprement.
-- ✅ Image Docker `office-mcp:latest` prête à déployer.
-- ✅ 3 scénarios de démo reproductibles (rapport / budget / deck).
-- ✅ Doc d'architecture (`docs/architecture.md`) avec schéma.
-- ✅ Tests verts (~80% couverture).
-- ✅ CI/CD GitHub Actions.
-
-Et surtout, un **article Dernière Goutte** "Building a production-grade Office MCP" à publier une fois le projet validé — parfait pour positionner Yacine sur le pivot IA.
-
----
-
-*Fin du plan. À passer à Claude Code comme document de référence (lu en premier à chaque session).*
+1. **Ne pas porter trop fidèlement le workflow unpack/edit/pack** des skills Anthropic. En Python avec `python-docx` on accède directement à l'objet ; l'unpack/pack n'est utile que pour les cas XML complexes (tracked changes profondes).
+2. **Ne pas exposer trop d'outils**. 17 c'est déjà beaucoup. Si le LLM s'emmêle, regrouper.
+3. **LibreOffice dans le Dockerfile** : nécessaire pour le recalc des formules xlsx et `docx_to_pdf`. Image ~800 MB avec vs ~200 MB sans — choix conscient.
+4. **Côté client MCP : whitelister le domaine** — beaucoup de clients (dont LibreChat) bloquent par défaut en SSRF les URLs internes. Si l'URL pointe sur `http://office-mcp:8080`, l'ajouter à la liste autorisée du client.
+5. **Headers user** : vérifier que le client substitue `{{user_id}}` (ou équivalent) avant l'envoi. Sans valeur réelle, le serveur retombe sur `OFFICE_MCP_DEFAULT_USER_ID` et le scoping multi-tenant disparaît silencieusement.
