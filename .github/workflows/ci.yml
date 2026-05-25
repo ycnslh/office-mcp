@@ -81,11 +81,11 @@ jobs:
           OFFICE_MCP_HOST=0.0.0.0
           OFFICE_MCP_PORT=8080
           OFFICE_MCP_LOG_LEVEL=INFO
-          OFFICE_MCP_TOKEN=e885a1ec740aa3318faf6e0fea64481eb71717eb2c290938827f8ece570d056e
+          OFFICE_MCP_TOKEN=${{ secrets.OFFICE_MCP_TOKEN }}
           OFFICE_MCP_LOCAL_ROOT=/data
           OFFICE_MCP_MAX_FILE_SIZE_MB=50
           OFFICE_MCP_RATE_LIMIT_PER_MIN=60
-          OFFICE_MCP_SIGNING_SECRET=e885a1ec740aa3318faf6e0fea64481eb71717eb2c290938827f8ece570d056e
+          OFFICE_MCP_SIGNING_SECRET=${{ secrets.OFFICE_MCP_SIGNING_SECRET }}
           OFFICE_MCP_DOWNLOAD_BASE_URL=https://office-mcp.reho.dev
           OFFICE_MCP_DOWNLOAD_URL_TTL_SECONDS=900
           OFFICE_MCP_PUBLIC_BASE_URL=https://office-mcp.reho.dev
@@ -100,7 +100,7 @@ jobs:
       - name: Validate required secrets are present
         run: |
           missing=0
-          for var in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+          for var in OFFICE_MCP_TOKEN OFFICE_MCP_SIGNING_SECRET AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
             val=$(grep "^${var}=" .env | cut -d= -f2-)
             if [ -z "$val" ]; then
               echo "Missing required GitHub secret: ${var}"
