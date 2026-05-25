@@ -81,7 +81,7 @@ async def _auth_start(request: Request) -> Response:
     """Short, our-domain redirect to the Microsoft authorize URL.
 
     Tools call :func:`auth_required_response` which gives the LLM a
-    URL like ``https://office-mcp.reho.dev/auth/start/<state>`` to
+    URL like ``https://mcp.example.com/auth/start/<state>`` to
     surface to the human. The full Microsoft URL (~250 chars) is
     rebuilt server-side here, so the model never has to render it
     verbatim — it cannot then mistype the client_id while paraphrasing
