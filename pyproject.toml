@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "office-mcp"
 version = "0.1.0"
-description = "MCP server to create and edit Word, Excel and PowerPoint documents — designed for LibreChat integration."
-authors = ["Yacine S. <yacine@netwatch.fr>"]
+description = "MCP server (streamable-http) to create and edit Word, Excel and PowerPoint documents on local storage or OneDrive."
+authors = ["Yacine S. <65450738+soulkill3r@users.noreply.github.com>"]
 readme = "README.md"
 license = "MIT"
 packages = [{ include = "office_mcp", from = "src" }]

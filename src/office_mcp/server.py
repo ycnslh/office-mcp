@@ -77,7 +77,6 @@ async def _health(_: Request) -> JSONResponse:
         {
             "status": overall,
             "version": __version__,
-            "phase": "10-hardening",
             "mcp_ready": True,
             "backends": backends,
         }

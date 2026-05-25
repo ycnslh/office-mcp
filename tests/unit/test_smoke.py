@@ -25,7 +25,6 @@ def test_health_endpoint(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["mcp_ready"] is True
-    assert payload["phase"].startswith("10-")
     assert "backends" in payload
     assert payload["backends"].get("local") == "ok"
     assert "version" in payload

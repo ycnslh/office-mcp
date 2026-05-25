@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     download_base_url: str | None = None
     """Externally-reachable base URL for the ``/files/{token}`` endpoint.
-    Example: ``http://pixel.lan:18080``. When unset, no ``download_url``
+    Example: ``https://mcp.example.com``. When unset, no ``download_url``
     is returned."""
 
     download_url_ttl_seconds: int = 900
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     public_base_url: str | None = None
     """Externally-reachable HTTPS base URL of this server, used to build
     OAuth ``redirect_uri`` values registered with Azure AD. Example:
-    ``https://office-mcp.reho.dev``. Required for the OAuth flow; when
+    ``https://mcp.example.com``. Required for the OAuth flow; when
     unset the ``/auth/*`` endpoints return 503."""
 
     # ── Azure AD / Microsoft Graph (delegated OAuth → user OneDrive) ─────
