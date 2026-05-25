@@ -1,5 +1,9 @@
 # office-mcp
 
+[![CI](https://github.com/soulkill3r/office-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/soulkill3r/office-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+
 MCP server that creates and edits Word, Excel, and PowerPoint
 documents. Speaks the **streamable-http** transport — compatible with
 any MCP client (e.g. LibreChat, Claude Desktop). Two storage backends
