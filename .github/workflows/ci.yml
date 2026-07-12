@@ -70,7 +70,7 @@ jobs:
     runs-on: self-hosted
     environment: production
     needs: [test, build-image]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository == 'soulkill3r/office-mcp'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && (github.repository == 'soulkill3r/office-mcp' || github.repository == 'ycnslh/office-mcp')
     steps:
       - uses: actions/checkout@v4
 
